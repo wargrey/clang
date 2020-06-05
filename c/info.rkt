@@ -6,4 +6,4 @@
 (define version "1.0")
 (define test-omit-paths 'all)
 
-(define scribblings '(["tamer/c.scrbl" (main-doc) (parsing-library)]))
+(define scribblings '(["tamer/clang.scrbl" (main-doc) (parsing-library)]))
