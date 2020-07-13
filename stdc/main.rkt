@@ -9,4 +9,4 @@
   (provide (rename-out [c-read-syntax read-syntax]))
   (provide (rename-out [c-info get-info]))
   
-  (require c/village/clang/reader))
+  (require stdc/village/clang/reader))
