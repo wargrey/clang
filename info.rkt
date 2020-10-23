@@ -7,6 +7,6 @@
 (define version "1.0")
 (define test-omit-paths 'all)
 
-(define deps '("base" "graphics" "typed-racket-lib" "typed-racket-more"))
+(define deps '("base" "typed-racket-lib" "typed-racket-more"))
 (define build-deps '("scribble-lib" "racket-doc"))
 
