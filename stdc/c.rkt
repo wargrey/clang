@@ -1,6 +1,9 @@
 #lang typed/racket/base
 
 (provide (all-defined-out))
+(provide read-c-source)
+
+(require "digitama/syntax/translation.rkt")
 
 (module reader racket/base
   (provide (except-out (all-from-out racket/base) read read-syntax))
