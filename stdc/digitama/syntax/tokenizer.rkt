@@ -3,6 +3,13 @@
 (provide (all-defined-out))
 
 (require "digicore.rkt")
+(require "tokenizer/category.rkt")
+
+(require digimon/character)
+(require digimon/stdio)
+
+(require racket/string)
+(require racket/unsafe/ops)
 
 (require (for-syntax racket/base))
 
@@ -32,15 +39,15 @@
          bad))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(define c-consume-token : (-> Input-Port (U String Symbol) (U C-Token EOF))
-  (lambda [/dev/cin source]
+(define c-consume-token : (-> Input-Port (U String Symbol) Boolean (U C-Token EOF))
+  (lambda [/dev/cin source cpp?]
     (define-values (line column position) (syn-token-port-location /dev/cin))
     (define srcloc (c-srcloc /dev/cin source line column position))
     (define ch (read-char /dev/cin))
     (cond [(eof-object? ch) eof]
           [(char-whitespace? ch) (c-consume-whitespace-token srcloc)]
           ;[(char-numeric? ch) (c-consume-numeric-token srcloc ch #false)]
-          ;[(c-char-name-prefix? ch) (c-consume-ident-token srcloc ch)]
+          [(c-identifier-initial-char? ch) (c-consume-identifier-token srcloc ch cpp?)]
           [else (case ch
                   [(#\( #\[ #\{) (c-make-token srcloc c:open ch)]
                   [(#\) #\] #\}) (c-make-token srcloc c:close ch)]
@@ -49,30 +56,13 @@
                   ;[(#\.) (c-consume-numeric-token srcloc ch #false)]
                   ;[(#\^ #\$ #\| #\~ #\*) (c-consume-match-token srcloc ch)]
                   ;[(#\#) (c-consume-hash-token srcloc)]
-                  ;[(#\@) (c-consume-@keyword-token srcloc)]
                   [(#\/) (c-consume-comment-token srcloc)]
-                  ;[(#\< #\-) (c-consume-cd-token srcloc ch)]
-                  ;[(#\;) (c-make-token srcloc c:semicolon #\;)]
-                  ;[(#\,) (c-make-token srcloc c:comma #\,)]
-                  ;[(#\:) (c-make-token srcloc c:colon #\:)]
-                  ;[(#\\) (c-consume-escaped-ident-token srcloc)]
-                  ;[(#\null) (c-make-token srcloc c:delim #\uFFFD)]
+                  [(#\;) (c-make-token srcloc c:semicolon #\;)]
+                  [(#\,) (c-make-token srcloc c:comma #\,)]
+                  [(#\=) (c-make-token srcloc c:eq #\=)]
+                  [(#\:) (c-make-token srcloc c:colon #\:)]
+                  [(#\\) (c-consume-universal-identifier-token srcloc cpp?)]
                   [else (c-make-bad-token srcloc c:bad:char struct:c:punctuator ch)])])))
-
-#;(define c-consume-cd-token : (-> C-Srcloc Char C-Token)
-  ;;; https://drafts.csswg.org/c-syntax/#CDO-token-diagram
-  ;;; https://drafts.csswg.org/c-syntax/#CDC-token-diagram
-  (lambda [srcloc open/close]
-    (define /dev/cin : Input-Port (c-srcloc-in srcloc))
-    (if (char=? open/close #\<)
-        (let ([cdo : (U EOF String) (peek-string 3 0 /dev/cin)])
-          (cond [(and (string? cdo) (string=? cdo "!--")) (read-string 3 /dev/cin) (c-make-token srcloc c:cdo '<!--)]
-                [else (c-make-token srcloc c:delim #\<)]))
-        (let ([cdc : (U EOF String) (peek-string 2 0 /dev/cin)])
-          (cond [(eof-object? cdc) (c-make-token srcloc c:delim #\-)]
-                [(string=? cdc "->") (read-string 2 /dev/cin) (c-make-token srcloc c:cdc '-->)]
-                [(c-identifier-prefix? #\- (string-ref cdc 0) (string-ref cdc 1)) (c-consume-ident-token srcloc #\-)]
-                [else (c-consume-numeric-token srcloc #\- #true)])))))
 
 (define c-consume-comment-token : (-> C-Srcloc (U C:WhiteSpace C:Operator C:Bad))
   (lambda [srcloc]
@@ -90,36 +80,24 @@
     (c-consume-whitespace /dev/cin)
     (c-make-token srcloc c:whitespace #\space)))
   
-#;(define c-consume-ident-token : (-> C-Srcloc Char (U C:Ident C:Function C:URL C:URange C:Bad))
-  ;;; https://drafts.csswg.org/c-syntax/#consume-an-ident-like-token
-  ;;; https://drafts.csswg.org/c-syntax/#urange-syntax
-  ;;; https://drafts.csswg.org/c-values/#urls
-  ;;; https://drafts.csswg.org/c-variables/#defining-variables
-  (lambda [srcloc id0]
+(define c-consume-identifier-token : (-> C-Srcloc Char Boolean (U C:Identifier C:Keyword C:String C:Bad))
+  (lambda [srcloc leader cpp?]
     (define /dev/cin : Input-Port (c-srcloc-in srcloc))
-    (define ch1 : (U EOF Char) (peek-char /dev/cin 0))
-    (define ch2 : (U EOF Char) (peek-char /dev/cin 1))
-    (cond [(and (char-ci=? id0 #\u) (char? ch1) (char=? ch1 #\+)
-                (or (char-hexdigit? ch2) (and (char? ch2) (char=? ch2 #\?))))
-           (read-char /dev/cin) (c-consume-unicode-range-token srcloc)]
-          [else (let ([name (c-consume-name /dev/cin id0)])
-                  (define ch : (U EOF Char) (peek-char /dev/cin))
-                  (cond [(or (eof-object? ch) (not (char=? ch #\()))
-                         (if (and (char=? id0 #\-) (eqv? id0 ch1))
-                             (let ([--id (string->unreadable-symbol name)]) (c-make-token srcloc c:ident --id --id))
-                             (c-make-token srcloc c:ident (string->symbol name) (string->symbol (string-downcase name))))]
-                        [(and (or (not (string-ci=? name "url")) (regexp-match-peek #px"^.\\s*[\"']" /dev/cin)) (read-char /dev/cin))
-                         (define fnorm : Symbol (string->symbol (string-downcase name)))
-                         (c-make-token srcloc c:function (string->unreadable-symbol name) fnorm null #false)]
-                        [else (read-char /dev/cin) (c-consume-url-token srcloc)]))])))
+    (define maybe-id : (U String (Listof Char)) (c-consume-ascii-identifier /dev/cin leader))
+    
+    (cond [(list? maybe-id) (c-make-bad-token srcloc c:bad:char struct:c:identifier (list->string maybe-id))]
+          [else (let-values ([(keywords keyword-map) (if (not cpp?) (values c-keywords c-keyword-map) (values cpp-keywords cpp-keyword-map))]
+                             [(sym) (string->symbol maybe-id)])
+                  (cond [(memq sym keywords) (c-make-token srcloc c:keyword (hash-ref keyword-map sym))]
+                        [else (c-make-token srcloc c:identifier sym)]))])))
+  
+(define c-consume-universal-identifier-token : (-> C-Srcloc Boolean (U C:Identifier C:Keyword C:String C:Bad))
+  (lambda [srcloc cpp?]
+    (define /dev/cin : Input-Port (c-srcloc-in srcloc))
+    (define maybe-head : (U Char (Listof Char)) (c-consume-universal-char /dev/cin #false 0))
 
-#;(define c-consume-escaped-ident-token : (-> C-Srcloc (U C:Ident C:Delim C:Function C:URL C:URange C:Bad))
-  ;;; https://drafts.csswg.org/c-syntax/#consume-token (when #\\ is found at the beginning of a non-whitespace token)
-  (lambda [srcloc]
-    (define /dev/cin : Input-Port (c-srcloc-in srcloc))
-    (if (c-valid-escape? #\\ (peek-char /dev/cin 1))
-        (c-consume-ident-token srcloc (c-consume-escaped-char /dev/cin))
-        (syn-remake-token (c-make-bad-token srcloc c:bad:char struct:c:delim #\\) c:delim #\\))))
+    (cond [(list? maybe-head) (c-make-bad-token srcloc c:bad:char struct:c:identifier (list->string maybe-head))]
+          [else (c-consume-identifier-token srcloc maybe-head cpp?)])))
 
 #;(define c-consume-string-token : (-> C-Srcloc Char (U C:String C:Bad))
   (lambda [srcloc quotation]
@@ -134,7 +112,7 @@
             [else (let ([next (peek-char /dev/cin)])
                     (cond [(eof-object? next) (consume-string-token chars)]
                           [(and (char=? next #\newline) (read-char /dev/cin)) (consume-string-token (cons ch chars))]
-                          [else (consume-string-token (cons (c-consume-escaped-char /dev/cin) chars))]))]))))
+                          [else (consume-string-token (cons (c-consume-universal-char /dev/cin) chars))]))]))))
 
 #;(define c-consume-numeric-token : (-> C-Srcloc Char Boolean (U C-Numeric C:Delim C:Bad))
   ;;; https://drafts.csswg.org/c-syntax/#consume-a-number
@@ -174,55 +152,6 @@
                           [(= n 1) (c-make-token srcloc c:one representation signed? n)]
                           [else (c-make-token srcloc c:integer representation signed? n)])))])))
 
-#;(define c-consume-url-token : (-> C-Srcloc (U C:URL C:Bad))
-  ;;; https://drafts.csswg.org/c-syntax/#consume-a-url-token
-  ;;; https://drafts.csswg.org/c-values/#urls
-  ;;; https://drafts.csswg.org/c-values/#url-empty
-  ;;; https://drafts.csswg.org/c-values/#about-invalid
-  (lambda [srcloc]
-    (define /dev/cin : Input-Port (c-srcloc-in srcloc))
-    (c-consume-whitespace /dev/cin)
-    (let consume-url-token ([srahc : (Listof Char) null])
-      (define ch : (U EOF Char) (read-char /dev/cin))
-      (cond [(or (eof-object? ch) (char=? ch #\)))
-             (define uri : String (list->string (reverse srahc)))
-             (when (eof-object? ch) (c-make-bad-token srcloc c:bad:eof struct:c:url uri))
-             (c-make-token srcloc c:url uri null #false)]
-            [(and (char-whitespace? ch) (c-consume-whitespace /dev/cin))
-             (define end : (U EOF Char) (read-char /dev/cin))
-             (define uri : String (list->string (reverse srahc)))
-             (cond [(or (eof-object? end) (char=? end #\))) (c-make-token srcloc c:url uri null #false)]
-                   [else (c-consume-bad-url-remnants /dev/cin (c-make-bad-token srcloc c:bad:blank struct:c:url uri))])]
-            [(c-valid-escape? ch (peek-char /dev/cin)) (consume-url-token (cons (c-consume-escaped-char /dev/cin) srahc))]
-            [(or (memq ch '(#\\ #\" #\' #\()) (c-char-non-printable? ch))
-             (c-consume-bad-url-remnants /dev/cin (c-make-bad-token srcloc c:bad:char struct:c:url ch))]
-            [else (consume-url-token (cons ch srahc))]))))
-
-#;(define c-consume-unicode-range-token : (-> C-Srcloc (U C:URange C:Bad))
-  ;;; https://drafts.csswg.org/c-syntax/#urange-syntax
-  (lambda [srcloc]
-    (define /dev/cin : Input-Port (c-srcloc-in srcloc))
-    (define-values (n rest) (c-consume-hexadecimal (c-srcloc-in srcloc) 6))
-    (define-values (start0 end0)
-      (let consume-? : (Values Fixnum Fixnum) ([s : Fixnum n] [e : Fixnum n] [? : Fixnum rest])
-        (cond [(zero? ?) (values s e)]
-              [else (let ([ch : (U EOF Char) (peek-char /dev/cin)])
-                      (cond [(or (eof-object? ch) (not (char=? ch #\?))) (values s e)]
-                            [else (read-char /dev/cin) (consume-? (fxlshift s 4)
-                                                                    (fxior (fxlshift e 4) #xF)
-                                                                    (fx- ? 1))]))])))
-    (define-values (start end)
-      (cond [(not (fx= start0 end0)) (values start0 end0)]
-            [else (let ([ch1 (peek-char /dev/cin 0)]
-                        [ch2 (peek-char /dev/cin 1)])
-                    (cond [(and (char? ch1) (char=? ch1 #\-) (char-hexdigit? ch2) (read-char /dev/cin))
-                           (define-values (end _) (c-consume-hexadecimal (c-srcloc-in srcloc) 6))
-                           (values start0 end)]
-                          [else (values start0 start0)]))]))
-    (cond [(and (index? start) (index? end) (<= start end #x10FFFF)) (c-make-token srcloc c:urange (cons start end))]
-          [(> end #x10FFFF) (c-make-bad-token srcloc c:bad:range struct:c:urange end)]
-          [else (c-make-bad-token srcloc c:bad:range struct:c:urange (cons start end))])))
-
 #;(define c-consume-hash-token : (-> C-Srcloc (U C:Hash C:Delim))
   ;;; https://drafts.csswg.org/c-syntax/#hash-token-diagram
   (lambda [srcloc]
@@ -235,44 +164,32 @@
           (c-make-token srcloc c:hash (string->keyword name) #|(string->keyword (string-downcase name))|#))
         (c-make-token srcloc c:delim #\#))))
 
-#;(define c-consume-@keyword-token : (-> C-Srcloc (U C:@Keyword C:Delim))
-  ;;; https://drafts.csswg.org/c-syntax/#at-keyword-token-diagram
-  (lambda [srcloc]
-    (define /dev/cin : Input-Port (c-srcloc-in srcloc))
-    (define ch1 : (U EOF Char) (peek-char /dev/cin 0))
-    (define ch2 : (U EOF Char) (peek-char /dev/cin 1))
-    (define ch3 : (U EOF Char) (peek-char /dev/cin 2))
-    (if (c-identifier-prefix? ch1 ch2 ch3)
-        (let ([name (c-consume-name (c-srcloc-in srcloc) #\@)])
-          (c-make-token srcloc c:@keyword (string->keyword name) (string->keyword (string-downcase name))))
-        (c-make-token srcloc c:delim #\@))))
-
-#;(define c-consume-match-token : (-> C-Srcloc Char (U C:Match C:Delim))
-  ;;; https://drafts.csswg.org/c-syntax/#include-match-token-diagram
-  ;;; https://drafts.csswg.org/c-syntax/#column-token-diagram
-  (lambda [srcloc prefix]
-    (define /dev/cin : Input-Port (c-srcloc-in srcloc))
-    (define ch : (U EOF Char) (peek-char /dev/cin))
-    (cond [(and (eq? prefix #\|) (eq? ch #\|) (read-char /dev/cin)) (c-make-token srcloc c:delim #\tab)]
-          [(and (eq? ch #\=) (read-char /dev/cin)) (c-make-token srcloc c:match prefix)]
-          [(eq? prefix #\|) (c-make-token srcloc c:vbar prefix)]
-          [else (c-make-token srcloc c:delim prefix)])))
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (define c-consume-whitespace : (-> Input-Port Void)
   (lambda [/dev/cin]
     (regexp-match #px"\\s*" /dev/cin)
     (void)))
   
-#;(define c-consume-name : (-> Input-Port (Option Char) String)
-  ;;; https://drafts.csswg.org/c-syntax/#consume-a-name
+(define c-consume-ascii-identifier : (-> Input-Port (Option Char) (U String (Listof Char)))
+  (lambda [/dev/cin ?leader]
+    (let consume-ascii-id ([span : Nonnegative-Fixnum 0]
+                           [skip : Nonnegative-Fixnum 0])
+      (define ch : (U EOF Char) (peek-char /dev/cin skip))
+      (cond [(eof-object? ch) (read-tail-string /dev/cin span ?leader)]
+            [(c-identifier-char? ch) (consume-ascii-id (unsafe-fx+ span 1) (unsafe-fx+ skip (char-utf-8-length ch)))]
+            [(eq? ch #\\) (c-consume-unicode-identifier /dev/cin (read-tail-string /dev/cin span ?leader))]
+            [else (read-tail-string /dev/cin span ?leader)]))))
+
+(define c-consume-unicode-identifier : (-> Input-Port (Option String) (U String (Listof Char)))
   (lambda [/dev/cin ?head]
-    (let consume-name ([srahc : (Listof Char) (if ?head (list ?head) null)])
+    (let consume-unicode-id ([srahc : (Listof Char) null])
       (define ch : (U EOF Char) (peek-char /dev/cin))
-      (cond [(and (c-char-name? ch) (read-char /dev/cin)) (consume-name (cons ch srahc))]
-            [(and (c-valid-escape? ch (peek-char /dev/cin 1)) (read-char /dev/cin))
-             (consume-name (cons (c-consume-escaped-char /dev/cin) srahc))]
-            [else (list->string (reverse srahc))]))))
+      (cond [(eof-object? ch) (string-append (or ?head "") (list->string (reverse srahc)))]
+            [(c-identifier-char? ch) (consume-unicode-id (cons ch srahc))]
+            [(not (eq? ch #\\)) (string-append (or ?head "") (list->string (reverse srahc)))]
+            [else (let ([maybe-unicode (c-consume-universal-char /dev/cin ?head 1)])
+                    (cond [(char? maybe-unicode) (consume-unicode-id (cons maybe-unicode srahc))]
+                          [else maybe-unicode]))]))))
 
 #;(define c-consume-number : (-> Input-Port Char (Values (U Flonum Integer) String))
   ;;; https://drafts.csswg.org/c-syntax/#consume-a-number
@@ -292,49 +209,20 @@
                           [(flonum? ?number) (values ?number representation)]
                           [else (values +nan.0 representation)]))]))))
 
-#;(define c-consume-hexadecimal : (->* (Input-Port Byte) (Fixnum #:\s?$? Boolean) (Values Fixnum Byte))
-  (lambda [/dev/cin --count [result 0] #:\s?$? [eat-last-whitespace? #false]]
-    (define hex : (U EOF Char) (peek-char /dev/cin))
-    (cond [(or (eof-object? hex) (not (char-hexdigit? hex)) (zero? --count))
-           (when (and eat-last-whitespace? (char? hex) (char-whitespace? hex)) (read-char /dev/cin))
-           (values result --count)]
-          [else (read-char /dev/cin) (c-consume-hexadecimal #:\s?$? eat-last-whitespace?
-                                                         /dev/cin (fx- --count 1)
-                                                         (fx+ (fxlshift result 4)
-                                                              (char->hexadecimal hex)))])))
-
-#;(define c-consume-escaped-char : (-> Input-Port Char)
-  ;;; https://drafts.csswg.org/c-syntax/#consume-an-escaped-code-point
-  (lambda [/dev/cin]
-    (define esc : (U EOF Char) (read-char /dev/cin))
-    (cond [(eof-object? esc) #\uFFFD]
-          [(not (char-hexdigit? esc)) esc]
-          [else (let-values ([(hex _) (c-consume-hexadecimal /dev/cin (sub1 6) (char->hexadecimal esc) #:\s?$? #true)])
-                  (cond [(or (fx<= hex 0) (fx> hex #x10FFFF)) #\uFFFD] ; #\nul and max unicode
-                        [(<= #xD800 hex #xDFFF) #\uFFFD] ; surrogate
-                        [else (integer->char hex)]))])))
-
-#;(define c-consume-bad-url-remnants : (-> Input-Port C:Bad C:Bad)
-  ;;; https://drafts.csswg.org/c-syntax/#consume-the-remnants-of-a-bad-url
-  (lambda [/dev/cin bad-url-token]
-    (define ch : (U EOF Char) (read-char /dev/cin))
-    (cond [(or (eof-object? ch) (char=? ch #\))) bad-url-token]
-          [(and (char=? ch #\\) (read-char /dev/cin)) (c-consume-bad-url-remnants /dev/cin bad-url-token)]
-          [else (c-consume-bad-url-remnants /dev/cin bad-url-token)])))
+(define c-consume-universal-char : (-> Input-Port (Option String) (U One Zero) (U Char (Listof Char)))
+  (lambda [/dev/cin ?head skip0]
+    (define initial? : Boolean (not (non-empty-string? ?head)))
+    (define shortform-type : (U EOF Char) (peek-char /dev/cin skip0))
+    (define shortform-size : (Option Byte) (case shortform-type [(#\u) 4] [(#\U) 8] [else #false]))
+    
+    (cond [(not shortform-size) (c-consume-error-chars/word /dev/cin ?head)]
+          [else (let-values ([(unicode count) (peek-unicode-char /dev/cin (+ skip0 1) 0 0)])
+                  (cond [(not (= count shortform-size)) (c-consume-error-chars/word /dev/cin ?head)]
+                        [(not (c-identifier-universal-char? unicode)) (c-consume-error-chars/word /dev/cin ?head)]
+                        [(and initial? (c-identifier-non-initial-char? unicode)) (c-consume-error-chars/word /dev/cin ?head)]
+                        [else (drop-bytes /dev/cin (+ 1 skip0 count)) unicode]))])))
   
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(define char-hexdigit? : (-> (U EOF Char) Boolean : #:+ Char)
-  (lambda [ch]
-    (and (char? ch)
-         (or (char-numeric? ch)
-             (char-ci<=? #\a ch #\f)))))
-
-(define char->hexadecimal : (-> Char Fixnum)
-  (lambda [hexch]
-    (cond [(char<=? #\a hexch) (fx- (char->integer hexch) #x57)]
-          [(char<=? #\A hexch) (fx- (char->integer hexch) #x37)]
-          [else (fx- (char->integer hexch) #x30)])))
-
 #;(define c-char-non-printable? : (-> (U EOF Char) Boolean : #:+ Char)
   (lambda [ch]
     (and (char? ch)
@@ -343,20 +231,92 @@
              (char<=? #\u000E ch #\u001F)
              (char=? ch #\rubout)))))
 
-#;(define c-char-name-prefix? : (-> (U EOF Char) Boolean : #:+ Char)
+(define c-identifier-char? : (-> (U EOF Char) Boolean : #:+ Char)
   (lambda [ch]
     (and (char? ch)
-         (or (char-lower-case? ch)
-             (char-upper-case? ch)
-             (char=? #\_ ch)
-             (char>=? ch #\u0080)))))
-
-#;(define c-char-name? : (-> (U EOF Char) Boolean : #:+ Char)
-  (lambda [ch]
-    (and (char? ch)
-         (or (c-char-name-prefix? ch)
+         (or (char-alphabetic? ch)
              (char-numeric? ch)
-             (char=? #\- ch)))))
+             (char=? #\_ ch)
+             (c-identifier-implementation-defined-char? ch)))))
+
+(define c-identifier-initial-char? : (-> (U EOF Char) Boolean : #:+ Char)
+  (lambda [ch]
+    (and (char? ch)
+         (or (char-alphabetic? ch)
+             (char=? #\_ ch)
+             (c-identifier-implementation-defined-char? ch)))))
+
+(define c-identifier-implementation-defined-char? : (-> Char Boolean)
+  ; these chars as identifiers' prefixes are borrowed from CSS
+  (lambda [ch]
+    (or (char=? #\u00B7 ch)
+        (char<=? #\u00C0 ch #\u00D6)
+        (char<=? #\u00D8 ch #\u00F6)
+        (char<=? #\u00F8 ch #\u037D)
+        (char<=? #\u037F ch #\u1FFF)
+        (char=? #\u200C ch)
+        (char=? #\u200D ch)
+        (char=? #\u203F ch)
+        (char=? #\u2040 ch)
+        (char<=? #\u2070 ch #\u218F)
+        (char<=? #\u2C00 ch #\u2FEF)
+        (char<=? #\u3001 ch #\uD7FF)
+        (char<=? #\uF900 ch #\uFDCF)
+        (char<=? #\uFDF0 ch #\uFFFD)
+        (char>=? ch #\U10000))))
+
+(define c-identifier-universal-char? : (-> Char Boolean)
+  (lambda [ch]
+    (or (char=? #\u00A8 ch)
+        (char=? #\u00AA ch)
+        (char=? #\u00AD ch)
+        (char=? #\u00AF ch)
+        (char<=? #\u00B2 ch #\u00B5)
+        (char<=? #\u00B7 ch #\u00BA)
+        (char<=? #\u00BC ch #\u00BE)
+        (char<=? #\u00C0 ch #\u00D6)
+        (char<=? #\u00D8 ch #\u00F6)
+        (char<=? #\u00F8 ch #\u00FF)
+        (char<=? #\u0100 ch #\u167F)
+        (char<=? #\u1681 ch #\u180D)
+        (char<=? #\u180F ch #\u1FFF)
+        (char<=? #\u200B ch #\u200D)
+        (char<=? #\u202A ch #\u202E)
+        (char<=? #\u203F ch #\u2040)
+        (char=? #\u2054 ch)
+        (char<=? #\u2060 ch #\u206F)
+        (char<=? #\u2070 ch #\u218F)
+        (char<=? #\u2460 ch #\u24FF)
+        (char<=? #\u2776 ch #\u2793)
+        (char<=? #\u2E80 ch #\u2FFF)
+        (char<=? #\u3004 ch #\u3007)
+        (char<=? #\u3021 ch #\u302F)
+        (char<=? #\u3031 ch #\uD7FF)
+        (char<=? #\uF900 ch #\uFD3D)
+        (char<=? #\uFD40 ch #\uFDCF)
+        (char<=? #\uFDF0 ch #\uFE44)
+        (char<=? #\uFE47 ch #\uFFFD)
+        (char<=? #\U10000 ch #\U1FFFD)
+        (char<=? #\U20000 ch #\U2FFFD)
+        (char<=? #\U30000 ch #\U3FFFD)
+        (char<=? #\U40000 ch #\U4FFFD)
+        (char<=? #\U50000 ch #\U5FFFD)
+        (char<=? #\U60000 ch #\U6FFFD)
+        (char<=? #\U70000 ch #\U7FFFD)
+        (char<=? #\U80000 ch #\U8FFFD)
+        (char<=? #\U90000 ch #\U9FFFD)
+        (char<=? #\UA0000 ch #\UAFFFD)
+        (char<=? #\UB0000 ch #\UBFFFD)
+        (char<=? #\UC0000 ch #\UCFFFD)
+        (char<=? #\UD0000 ch #\UDFFFD)
+        (char<=? #\UE0000 ch #\UEFFFD))))
+
+(define c-identifier-non-initial-char? : (-> Char Boolean)
+  (lambda [ch]
+    (or (char<=? #\u0300 ch #\u036F)
+        (char<=? #\u1DC0 ch #\u1DFF)
+        (char<=? #\u20D0 ch #\u20FF)
+        (char<=? #\uFE20 ch #\uFE2F))))
   
 #;(define c-valid-escape? : (-> (U EOF Char) (U EOF Char) Boolean : #:+ Char)
   ;;; https://drafts.csswg.org/c-syntax/#escaping
@@ -405,3 +365,12 @@
     (and (char? ch1) (char? ch2)
          (char=? ch1 #\.)
          (char<=? #\0 ch2 #\9))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(define c-consume-error-chars/word : (-> Input-Port (Option String) (Listof Char))
+  (lambda [/dev/cin ?head]
+    (let consume-word ([srahc : (Listof Char) (if (not ?head) null (reverse (string->list ?head)))])
+      (define ch : (U EOF Char) (read-char /dev/cin))
+      (cond [(eof-object? ch) (reverse srahc)]
+            [(not (char-whitespace? ch)) (consume-word (cons ch srahc))]
+            [else (reverse srahc)]))))

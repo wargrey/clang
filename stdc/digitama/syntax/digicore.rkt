@@ -118,7 +118,7 @@
    [c:semicolon       #:+ C:Semicolon       #:-> c:operator]
    [c:comma           #:+ C:Comma           #:-> c:operator]
    [c:slash           #:+ C:Slash           #:-> c:operator]
-   [c:vbar            #:+ C:VBar            #:-> c:operator]
+   [c:eq              #:+ C:Eq              #:-> c:operator]
    
    [c:bad:eof         #:+ C:Bad:EOF         #:-> c:bad]
    [c:bad:eol         #:+ C:Bad:EOL         #:-> c:bad]
@@ -151,8 +151,6 @@
   [exn:c:deprecated         #:-> exn:c]
   [exn:c:loop               #:-> exn:c]
   [exn:c:namespace          #:-> exn:c]
-  [exn:c:racket             #:-> exn:c]
-  [exn:c:contract           #:-> exn:c:racket]
   [exn:c:unrecognized       #:-> exn:c]
   [exn:c:misplaced          #:-> exn:c:unrecognized]
   [exn:c:type               #:-> exn:c:unrecognized]

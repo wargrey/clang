@@ -20,7 +20,7 @@
 
     (define tokens : (Listof C-Token)
       (let read-c-token ([snekot : (Listof C-Token) null])
-        (define t (c-consume-token /dev/cin source))
+        (define t (c-consume-token /dev/cin source #false))
         
         (cond [(eof-object? t) (reverse snekot)]
               [else (read-c-token (cons t snekot))])))
