@@ -1,7 +1,12 @@
 #lang stdc/c
 
+#include <stdio.h>
+
 // A line comment
 
+static char* \u22error = "error";
+static char* _\u597d_ = "robust test";
+static char* error = "bad \u22 string";
 
 /**
  * A block comment
@@ -17,5 +22,3 @@ int main(int argc, char* argv[]) {
 
     return 0;
 }
-
-//

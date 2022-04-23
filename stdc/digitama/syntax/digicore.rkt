@@ -129,7 +129,7 @@
 
   ; WARNING: Carefully defining types to avoid happening to mess up '(list? datum)'. 
   (define-symbolic-tokens c-bad-token #:+ C-Bad-Token
-    [c:bad            #:+ C:Bad             #:as String]
+    [c:bad            #:+ C:Bad             #:as (Pairof Symbol String)]
     [c:close          #:+ C:Close           #:as Char])
   
   (define-symbolic-tokens c-symbolic-token #:+ C-Symbolic-Token

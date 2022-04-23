@@ -8,14 +8,12 @@
 (define-syntax (define-c-keywords stx)
   (syntax-case stx [:]
     [(_ id : [kw ...])
-     (with-syntax ([ids (datum->syntax #'id (string->symbol (format "~as" (syntax-e #'id))))]
-                   [id-map (datum->syntax #'id (string->symbol (format "~a-map" (syntax-e #'id))))]
+     (with-syntax ([id-map (datum->syntax #'id (string->symbol (format "~a-map" (syntax-e #'id))))]
                    [(keyword ...) (for/list ([<kw> (in-list (syntax->list #'(kw ...)))])
                                          (datum->syntax <kw> (string->keyword (symbol->string (syntax-e <kw>)))))])
        (syntax/loc stx
-         (begin (define ids : (Listof Symbol) (list 'kw ...))
-                (define id-map : (HashTable Symbol Keyword)
-                  (make-hasheq (list (cons 'kw 'keyword) ...))))))]))
+         (define id-map : (HashTable Symbol Keyword)
+           (make-hasheq (list (cons 'kw 'keyword) ...)))))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (define-c-keywords c-keyword :
@@ -31,3 +29,13 @@
            operator private protected public register reinterpret_cast requires return short signed sizeof static
            static_assert static_cast struct switch template this thread_local throw true try typedef typeid typename
            union unsigned using virtual void volatile wchar_t while])
+
+(define c-escape-sequences : (HashTable Any Char)
+  (make-hasheq (list (cons #\n #\newline)
+                     (cons #\t #\tab)
+                     (cons #\v #\vtab)
+                     (cons #\b #\backspace)
+                     (cons #\r #\return)
+                     (cons #\n #\newline)
+                     (cons #\f #\page)
+                     (cons #\a #\u07))))
