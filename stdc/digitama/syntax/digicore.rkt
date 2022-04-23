@@ -29,10 +29,10 @@
          (begin (struct id parent ([datum : Type]) #:transparent #:type-name Number)
                 (define (id=? [t1 : Number] [t2 : Number]) : Boolean (type=? (id-datum t1) (id-datum t2)))
                 (define-token-interface id : Type id? id-datum #:+ Number #:= type=? #:for C-Syntax-Any #:throw exn:c:range))))]
-    [(_ id : Identifier parent ((~and (~or Symbol Keyword) Type) #:ci rest ...) #:with id? id-datum)
+    [(_ id : Identifier parent ((~and (~or Symbol Keyword) Type) rest ...) #:with id? id-datum)
      (with-syntax ([id=? (format-id #'id "~a=?" (syntax-e #'id))])
        (syntax/loc stx
-         (begin (struct id parent ([datum : Type] [norm : Type] rest ...) #:transparent #:type-name Identifier)
+         (begin (struct id parent ([datum : Type] rest ...) #:transparent #:type-name Identifier)
                 (define (id=? [t1 : Identifier] [t2 : Identifier]) : Boolean (eq? (id-datum t1) (id-datum t2)))
                 (define-token-interface id : Type id? id-datum #:+ Identifier #:eq? eq? #:for C-Syntax-Any #:throw exn:c:range))))]
     [(_ id : Otherwise parent (Type rest ...) #:with id? id-datum)
@@ -136,7 +136,7 @@
     [c:operator       #:+ C:Operator        #:as Char]
     [c:identifier     #:+ C:Identifier      #:as Symbol]
     [c:keyword        #:+ C:Keyword         #:as Keyword]
-    [c:string         #:+ C:String          #:as String]
+    [c:string         #:+ C:String          #:as String   [type : (Option Symbol)]]
     [c:literal        #:+ C:Literal         #:as Char]
     [c:punctuator     #:+ C:Punctuator      #:as Symbol]
     [c:whitespace     #:+ C:WhiteSpace      #:as (U String Char)])

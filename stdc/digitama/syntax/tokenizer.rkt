@@ -115,7 +115,7 @@
     (define /dev/cin : Input-Port (c-srcloc-in srcloc))
     (define maybe-string : (U String (Pairof C:Bad-Constructor (Listof Char))) (c-consume-string /dev/cin quotation))
 
-    (cond [(string? maybe-string) (c-make-token srcloc c:string maybe-string)]
+    (cond [(string? maybe-string) (c-make-token srcloc c:string maybe-string #false)]
           [else (c-make-bad-token srcloc (car maybe-string) struct:c:string (cdr maybe-string))])))
 
 #;(define c-consume-numeric-token : (-> C-Srcloc Char Boolean (U C-Numeric C:Delim C:Bad))
@@ -202,17 +202,16 @@
       (cond [(eof-object? ch) (cons c:bad:eof (string->list (read-tail-string /dev/cin span #false)))]
             [(eq? ch quotation) (begin0 (read-tail-string /dev/cin span #false) (read-char /dev/cin))]
             [(not (eq? ch #\\)) (consume-string (unsafe-fx+ span 1) (unsafe-fx+ skip (char-utf-8-length ch)))]
-            [else (let consume-universal-string ([head (read-tail-string /dev/cin span #false)]
-                                                 [uspan : Nonnegative-Fixnum 0]
-                                                 [uskip : Nonnegative-Fixnum 0])
-                    (define ch : (U EOF Char) (peek-char /dev/cin uskip))
-                    (cond [(eof-object? ch) (read-tail-string /dev/cin uspan head)]
-                          [(eq? ch quotation) (begin0 (read-tail-string /dev/cin uspan head) (read-char /dev/cin))]
-                          [(not (eq? ch #\\)) (consume-universal-string head (unsafe-fx+ uspan 1) (unsafe-fx+ uskip (char-utf-8-length ch)))]
-                          [else (let* ([head++ (read-tail-string /dev/cin uspan head)]
-                                       [_ (read-char /dev/cin)]
+            [else (let consume-escaped-string ([head (read-tail-string /dev/cin span #false)]
+                                               [espan : Nonnegative-Fixnum 0]
+                                               [eskip : Nonnegative-Fixnum 0])
+                    (define ch : (U EOF Char) (peek-char /dev/cin eskip))
+                    (cond [(eof-object? ch) (read-tail-string /dev/cin espan head)]
+                          [(eq? ch quotation) (begin0 (read-tail-string /dev/cin espan head) (read-char /dev/cin))]
+                          [(not (eq? ch #\\)) (consume-escaped-string head (unsafe-fx+ espan 1) (unsafe-fx+ eskip (char-utf-8-length ch)))]
+                          [else (let* ([head++ (begin0 (read-tail-string /dev/cin espan head) (read-char /dev/cin))]
                                        [maybe-char (c-consume-escaped-char /dev/cin head++ quotation)])
-                                  (cond [(char? maybe-char) (consume-universal-string (string-append head++ (string maybe-char)) 0 0)]
+                                  (cond [(char? maybe-char) (consume-escaped-string (string-append head++ (string maybe-char)) 0 0)]
                                         [(eof-object? maybe-char) head++]
                                         [else (cons c:bad:char maybe-char)]))]))]))))
 
@@ -237,9 +236,15 @@
 (define c-consume-escaped-char : (-> Input-Port (Option String) (Option Char) (U EOF Char (Listof Char)))
   (lambda [/dev/cin ?head ?quotation]
     (define next-ch : (U EOF Char) (read-char /dev/cin))
-    (cond [(eq? next-ch #\u) (c-consume-universal-char /dev/cin 4 #false (list #\\ #\u) ?head ?quotation 0)]
-          [(eq? next-ch #\U) (c-consume-universal-char /dev/cin 8 #false (list #\\ #\U) ?head ?quotation 0)]
+    (cond [(eof-object? next-ch) next-ch]
           [(hash-has-key? c-escape-sequences next-ch) (hash-ref c-escape-sequences next-ch)]
+          [(eq? next-ch #\x)
+           (let-values ([(unicode count) (peek-flexible-hexadecimal /dev/cin 0 0 0)])
+             (cond [(char-integer? unicode) (drop-bytes /dev/cin count) (integer->char unicode)]
+                   [else (c-consume-error-chars /dev/cin (list #\\ #\x) ?head ?quotation)]))]
+          [(char-octdigit? next-ch) (let-values ([(unicode _) (read-limited-unicode-from-octadecimal /dev/cin 2 (char->octadecimal next-ch))]) unicode)]
+          [(eq? next-ch #\u) (c-consume-universal-char /dev/cin 4 #false (list #\\ #\u) ?head ?quotation 0)]
+          [(eq? next-ch #\U) (c-consume-universal-char /dev/cin 8 #false (list #\\ #\U) ?head ?quotation 0)]
           [else next-ch #| should warn "unknown escape sequence" for chars other than #\\, #\', #\", and #\? |#])))
 
 (define c-consume-universal-char : (case-> [Input-Port (Listof Char) (Option String) (Option Char) (U One Zero) -> (U Char (Listof Char))]
@@ -251,7 +256,7 @@
        (cond [(not shortform-size) (c-consume-error-chars /dev/cin leading-chars ?head ?quotation)]
              [else (c-consume-universal-char /dev/cin shortform-size initial? leading-chars ?head ?quotation (+ skip0 1))]))]
     [(/dev/cin shortform-size initial? leading-chars ?head ?quotation skip0)
-     (let-values ([(unicode count) (peek-unicode-char /dev/cin skip0 0 0)])
+     (let-values ([(unicode count) (peek-unicode-from-hexadecimal /dev/cin skip0 0 0)])
        (cond [(not (= count shortform-size)) (c-consume-error-chars /dev/cin leading-chars ?head ?quotation)]
              [(not (c-identifier-universal-char? unicode)) (c-consume-error-chars /dev/cin leading-chars ?head ?quotation)]
              [(and initial? (c-identifier-non-initial-char? unicode)) (c-consume-error-chars /dev/cin leading-chars ?head ?quotation)]
