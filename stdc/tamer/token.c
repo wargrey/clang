@@ -1,13 +1,11 @@
-#lang stdc/c
-
 #include <stdio.h>
 
 // A line comment
 
 static char* \u22error = "error";
-static char* _\u597d_ = "robust test";
-static char* error = "bad \u22 string";
-static char* octal = "'\1111' is an 'I' followed by an '1'";
+static char* _\u597d_ = "robust test"s;
+static char* error = "bad \u22 string"s;
+static char* octal = "'\1111' is an 'I' followed by an '1'"s;
 
 /**
  * A block comment

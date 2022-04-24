@@ -125,7 +125,7 @@
    [c:bad:char        #:+ C:Bad:Char        #:-> c:bad]
    [c:bad:blank       #:+ C:Bad:Blank       #:-> c:bad]
    [c:bad:range       #:+ C:Bad:Range       #:-> c:bad]
-   [c:bad:stdin       #:+ C:Bad:StdIn       #:-> c:bad]]
+   [c:bad:suffix      #:+ C:Bad:Suffix      #:-> c:bad]]
 
   ; WARNING: Carefully defining types to avoid happening to mess up '(list? datum)'. 
   (define-symbolic-tokens c-bad-token #:+ C-Bad-Token
@@ -136,13 +136,14 @@
     [c:operator       #:+ C:Operator        #:as Char]
     [c:identifier     #:+ C:Identifier      #:as Symbol]
     [c:keyword        #:+ C:Keyword         #:as Keyword]
-    [c:string         #:+ C:String          #:as String   [type : (Option Symbol)]]
+    [c:string         #:+ C:String          #:as String   [type : (Option Symbol)] [suffix : (Option Symbol)]]
     [c:literal        #:+ C:Literal         #:as Char]
     [c:punctuator     #:+ C:Punctuator      #:as Symbol]
     [c:whitespace     #:+ C:WhiteSpace      #:as (U String Char)])
 
   (define-numeric-tokens c-number #:+ C-Number #:nan +nan.0
-    [c:integer        #:+ C:Integer         #:as Integer]
+    [c:multichar      #:+ C:MultiChar       #:as Integer]
+    [c:integer        #:+ C:Integer         #:as Fixnum]
     [c:flonum         #:+ C:Flonum          #:as Flonum]))
 
 (define-syntax-error exn:c #:as C-Syntax-Error #:for C-Token
@@ -194,8 +195,12 @@
           [(c-numeric? instance) (c-numeric-representation instance)]
           [(c:keyword? instance) (keyword->immutable-string (c:keyword-datum instance))]
           [(c:operator=:=? instance #\tab) "||"]
-          [(c:string? instance) (~s (c:string-datum instance))]
-          [else (~a (c-token->datum instance))])))
+          [(not (c:string? instance)) (~a (c-token->datum instance))]
+          [else (let ([pf (c:string-type instance)]
+                      [sf (c:string-suffix instance)])
+                  (string-append (if pf (symbol->immutable-string pf) "")
+                                 (~s (c:string-datum instance))
+                                 (if sf (symbol->immutable-string sf) "")))])))
 
 (define c-token->string : (->* (C-Token) ((Option Any) (Option Any)) String)
   (lambda [instance [alt-object #false] [alt-datum #false]]

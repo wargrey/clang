@@ -38,4 +38,8 @@
                      (cons #\r #\return)
                      (cons #\n #\newline)
                      (cons #\f #\page)
-                     (cons #\a #\u07))))
+                     (cons #\a #\u07)
+                     (cons #\0 #\null))))
+
+(define c-string-encoding-tags : (Listof Symbol) (list 'u8 'u 'U 'L))
+(define cpp-string-encoding-tags : (Listof Symbol) (list 'u8 'u 'U 'L 'R 'u8R 'uR 'UR 'LR))

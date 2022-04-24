@@ -78,7 +78,7 @@
       [(drracket:default-filters) '(["C++ Sources" "*.cpp;*.cxx"])]
       [(drracket:default-extension) "cpp"]
       ;[(drracket:indentation) (dynamic-require 'sgml/village/clang/indentation 'xml-indentation)]
-      [(color-lexer) (dynamic-require 'stdc/village/clang/lexer 'c-lexer)]
+      [(color-lexer) (dynamic-require 'stdc/village/clang/lexer 'cpp-lexer)]
       [else default])))
 
 (define (header-info in mod line col pos)

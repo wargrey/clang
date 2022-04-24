@@ -17,12 +17,6 @@
   (lambda [/dev/rawin]
     (define /dev/cin : Input-Port (cpp-open-input-port /dev/rawin #false))
     (define source : (U String Symbol) (syn-token-port-name /dev/cin))
-
-    (define tokens : (Listof C-Token)
-      (let read-c-token ([snekot : (Listof C-Token) null])
-        (define t (c-consume-token /dev/cin source #false))
-        
-        (cond [(eof-object? t) (reverse snekot)]
-              [else (read-c-token (cons t snekot))])))
-
+    (define tokens : (Listof C-Token) (c-consume-tokens /dev/cin source))
+    
     (c-source tokens)))
