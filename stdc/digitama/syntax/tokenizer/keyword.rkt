@@ -41,5 +41,12 @@
                      (cons #\a #\u07)
                      (cons #\0 #\null))))
 
-(define c-string-encoding-tags : (Listof Symbol) (list 'u8 'u 'U 'L))
-(define cpp-string-encoding-tags : (Listof Symbol) (list 'u8 'u 'U 'L 'R 'u8R 'uR 'UR 'LR))
+(define c-encoding-tags : (Listof Symbol) (list 'u8 'u 'U 'L))
+(define cpp-encoding-tags : (Listof Symbol) (list 'u8 'u 'U 'L 'R 'u8R 'uR 'UR 'LR))
+
+(define cpp-encoding-tag->x.ceiling : (-> Symbol Nonnegative-Fixnum)
+  (lambda [encoding-tag]
+    (case encoding-tag
+      [(u8 u8R) #xFF]
+      [(U UR) (assert #xFFFFFFFF fixnum?)]
+      [else #xFFFF])))

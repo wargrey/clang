@@ -60,7 +60,7 @@
 
 (define-syntax (define-numeric-tokens stx)
   (syntax-case stx []
-    [(_ token #:+ Token #:nan nan [id #:+ ID #:as Type] ...)
+    [(_ token #:+ Token #:nan nan #:-> parent [id #:+ ID #:as Type] ...)
      (with-syntax ([token->datum (format-id #'token "~a->datum" (syntax-e #'token))]
                    [([id? id=? id-datum type=?] ...)
                     (for/list ([<id> (in-list (syntax->list #'(id ...)))]
@@ -73,7 +73,7 @@
                                     [(string-contains? type-name "Fixnum") #'fx=]
                                     [else #'=]))))])
        (syntax/loc stx
-         (begin (struct token c-numeric () #:transparent #:type-name Token)
+         (begin (struct token parent () #:transparent #:type-name Token)
                 (define-token id : ID token #:as Type #:=? type=? #:with id? id-datum) ...
                 (define (token->datum [t : Token]) : (U Type ...) (cond [(id? t) (id-datum t)] ... [else nan])))))]))
   
@@ -127,11 +127,6 @@
    [c:bad:range       #:+ C:Bad:Range       #:-> c:bad]
    [c:bad:suffix      #:+ C:Bad:Suffix      #:-> c:bad]]
 
-  ; WARNING: Carefully defining types to avoid happening to mess up '(list? datum)'. 
-  (define-symbolic-tokens c-bad-token #:+ C-Bad-Token
-    [c:bad            #:+ C:Bad             #:as (Pairof Symbol String)]
-    [c:close          #:+ C:Close           #:as Char])
-  
   (define-symbolic-tokens c-symbolic-token #:+ C-Symbolic-Token
     [c:operator       #:+ C:Operator        #:as Char]
     [c:identifier     #:+ C:Identifier      #:as Symbol]
@@ -141,10 +136,15 @@
     [c:punctuator     #:+ C:Punctuator      #:as Symbol]
     [c:whitespace     #:+ C:WhiteSpace      #:as (U String Char)])
 
-  (define-numeric-tokens c-number #:+ C-Number #:nan +nan.0
+  (define-numeric-tokens c-number #:+ C-Number #:nan +nan.0 #:-> c-numeric
     [c:multichar      #:+ C:MultiChar       #:as Integer]
     [c:integer        #:+ C:Integer         #:as Fixnum]
-    [c:flonum         #:+ C:Flonum          #:as Flonum]))
+    [c:flonum         #:+ C:Flonum          #:as Flonum])
+
+  ; WARNING: Carefully defining types to avoid happening to mess up '(list? datum)'. 
+  (define-symbolic-tokens c-bad-token #:+ C-Bad-Token
+    [c:bad            #:+ C:Bad             #:as (Pairof Symbol String)]
+    [c:close          #:+ C:Close           #:as Char]))
 
 (define-syntax-error exn:c #:as C-Syntax-Error #:for C-Token
   #:with [c-make-syntax-error c-log-syntax-error]

@@ -56,12 +56,12 @@
        (c-make-bad-token src (car bad-datum) struct:c:token (cdr bad-datum)))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(define c-consume-tokens : (-> Input-Port (U String Symbol False) (Listof C-Token))
-  (lambda [/dev/cin maybe-source]
+(define c-consume-tokens : (->* (Input-Port (U String Symbol False)) (Boolean) (Listof C-Token))
+  (lambda [/dev/cin maybe-source [cpp? #false]]
     (define source : (U String Symbol) (or maybe-source (syn-token-port-name /dev/cin)))
     
     (let read-c-token ([snekot : (Listof C-Token) null])
-      (define t (c-consume-token /dev/cin source #false))
+      (define t (c-consume-token /dev/cin source cpp?))
       
       (cond [(eof-object? t) (reverse snekot)]
             [else (read-c-token (cons t snekot))]))))
@@ -79,7 +79,7 @@
           [else (case ch
                   [(#\( #\[ #\{ #\<) (c-make-token srcloc c:open ch)]
                   [(#\) #\] #\} #\>) (c-make-token srcloc c:close ch)]
-                  [(#\") (c-consume-string-token srcloc ch cpp?)]
+                  [(#\") (c-consume-string-token srcloc ch cpp? #xFF)]
                   ;[(#\+) (c-consume-numeric-token srcloc ch #true)]
                   ;[(#\.) (c-consume-numeric-token srcloc ch #false)]
                   ;[(#\^ #\$ #\| #\~ #\*) (c-consume-match-token srcloc ch)]
@@ -117,10 +117,11 @@
           [else (let ([keyword-map (if (not cpp?) c-keyword-map cpp-keyword-map)]
                       [sym (string->symbol maybe-id)])
                   (cond [(hash-has-key? keyword-map sym) (c-make-token srcloc c:keyword (hash-ref keyword-map sym))]
-                        #;[(memq sym c-string-encoding-tags)
-                         (let ([maybe-quotation])
-                           )]
-                        [else (c-make-token srcloc c:identifier sym)]))])))
+                        [else (let ([?q (peek-char /dev/cin 0)])
+                                (cond [(not (or (eq? ?q #\") (eq? ?q #\'))) (c-make-token srcloc c:identifier sym)]
+                                      [else (c-consume-special-string-token srcloc sym ?q cpp?
+                                                                            (eq? (string-ref maybe-id (sub1 (string-length maybe-id)))
+                                                                                 #\R))]))]))])))
   
 (define c-consume-universal-identifier-token : (-> C-Srcloc Boolean (U C:Identifier C:Keyword C:String C:Bad))
   (lambda [srcloc cpp?]
@@ -130,19 +131,29 @@
     (cond [(pair? maybe-head) (c-make-bad-token srcloc struct:c:identifier maybe-head)]
           [else (c-consume-identifier-token srcloc maybe-head cpp?)])))
 
-(define c-consume-string-token : (-> C-Srcloc Char Boolean (U C:String C:Bad))
-  (lambda [srcloc quotation cpp?]
+(define c-consume-string-token : (->* (C-Srcloc Char Boolean Nonnegative-Fixnum) ((Option Symbol)) (U C:String C:Bad))
+  (lambda [srcloc quotation cpp? x.ceiling [tag #false]]
     (define /dev/cin : Input-Port (c-srcloc-in srcloc))
     (define-values (maybe-string maybe-suffix)
       (if (not cpp?)
-          (c-consume-string /dev/cin quotation)
-          (cpp-consume-string /dev/cin quotation)))
+          (c-consume-string /dev/cin quotation x.ceiling)
+          (cpp-consume-string /dev/cin quotation x.ceiling)))
 
-    (cond [(string? maybe-string) (c-make-token srcloc c:string maybe-string #false maybe-suffix)]
+    (cond [(string? maybe-string) (c-make-token srcloc c:string maybe-string tag maybe-suffix)]
           [else (c-make-bad-token srcloc (car maybe-string) struct:c:string
                                   (cond [(not maybe-suffix) (cdr maybe-string)]
                                         [else (append (cdr maybe-string)
                                                       (string->list (symbol->immutable-string maybe-suffix)))]))])))
+
+(define c-consume-special-string-token : (-> C-Srcloc Symbol Char Boolean Boolean (U C:Identifier C:String C:Bad))
+  (lambda [srcloc tag quotation cpp? raw?]
+    (define encoding-tags : (Listof Symbol) (if (or (not cpp?) (eq? quotation #\')) c-encoding-tags cpp-encoding-tags))
+
+    (cond [(not (memq tag encoding-tags)) (c-make-token srcloc c:identifier tag)]
+          [else (let ([x.ceiling (cpp-encoding-tag->x.ceiling tag)])
+                  (read-char (c-srcloc-in srcloc))
+                  (cond [(not raw?) (c-consume-string-token srcloc quotation cpp? x.ceiling tag)]
+                        [else (c-consume-string-token srcloc quotation cpp? x.ceiling tag)]))])))
 
 #;(define c-consume-numeric-token : (-> C-Srcloc Char Boolean (U C-Numeric C:Delim C:Bad))
   ;;; https://drafts.csswg.org/c-syntax/#consume-a-number
@@ -220,8 +231,8 @@
                                   (cond [(char? maybe-unicode) (consume-universal-id (string-append head++ (string maybe-unicode)) 0 0)]
                                         [else maybe-unicode]))]))]))))
 
-(define c-consume-string : (-> Input-Port Char (Values (U String C-Bad-Datum) False))
-  (lambda [/dev/cin quotation]
+(define c-consume-string : (-> Input-Port Char Nonnegative-Fixnum (Values (U String C-Bad-Datum) False))
+  (lambda [/dev/cin quotation x.ceiling]
     (values
      (let consume-string ([span : Nonnegative-Fixnum 0]
                           [skip : Nonnegative-Fixnum 0])
@@ -233,20 +244,20 @@
                                                 [espan : Nonnegative-Fixnum 0]
                                                 [eskip : Nonnegative-Fixnum 0])
                      (define ch : (U EOF Char) (peek-char /dev/cin eskip))
-                     (cond [(eof-object? ch) (read-tail-string /dev/cin espan head)]
+                     (cond [(eof-object? ch) (cons c:bad:eof (string->list (read-tail-string /dev/cin espan head)))]
                            [(eq? ch quotation) (begin0 (read-tail-string /dev/cin espan head) (read-char /dev/cin))]
                            [(not (eq? ch #\\)) (consume-escaped-string head (unsafe-fx+ espan 1) (unsafe-fx+ eskip (char-utf-8-length ch)))]
                            [else (let* ([head++ (begin0 (read-tail-string /dev/cin espan head) (read-char /dev/cin))]
-                                        [maybe-char (c-consume-escaped-char /dev/cin head++ quotation)])
+                                        [maybe-char (c-consume-escaped-char /dev/cin head++ quotation x.ceiling)])
                                    (cond [(char? maybe-char) (consume-escaped-string (string-append head++ (string maybe-char)) 0 0)]
                                          [(eof-object? maybe-char) head++]
                                          [else maybe-char]))]))]))
 
      #false)))
 
-(define cpp-consume-string : (-> Input-Port Char (Values (U String C-Bad-Datum) (Option Symbol)))
-  (lambda [/dev/cin quotation]
-    (define-values (maybe-string _) (c-consume-string /dev/cin quotation))
+(define cpp-consume-string : (-> Input-Port Char Nonnegative-Fixnum (Values (U String C-Bad-Datum) (Option Symbol)))
+  (lambda [/dev/cin quotation x.ceiling]
+    (define-values (maybe-string _) (c-consume-string /dev/cin quotation x.ceiling))
 
     ; check for temporary string or user-defined suffix
     (cond [(not (c-identifier-char? (peek-char /dev/cin 0))) (values maybe-string #false)]
@@ -273,16 +284,20 @@
                           [(flonum? ?number) (values ?number representation)]
                           [else (values +nan.0 representation)]))]))))
 
-(define c-consume-escaped-char : (-> Input-Port (Option String) (Option Char) (U EOF Char C-Bad-Datum))
-  (lambda [/dev/cin ?head ?quotation]
+(define c-consume-escaped-char : (-> Input-Port (Option String) (Option Char) Nonnegative-Fixnum (U EOF Char C-Bad-Datum))
+  (lambda [/dev/cin ?head ?quotation x.ceiling]
     (define next-ch : (U EOF Char) (read-char /dev/cin))
     (cond [(eof-object? next-ch) next-ch]
           [(hash-has-key? c-escape-sequences next-ch) (hash-ref c-escape-sequences next-ch)]
           [(eq? next-ch #\x)
-           (let-values ([(unicode count) (peek-flexible-hexadecimal /dev/cin 0 0 0)])
-             (cond [(char-integer? unicode) (drop-bytes /dev/cin count) (integer->char unicode)]
+           (let-values ([(unicode count) (peek-flexible-hexadecimal /dev/cin 0 0 0 #:ceiling (assert #xFFFFFFFFF fixnum?))])
+             (cond [(= count 0) (c-consume-error-chars /dev/cin (list #\\ #\x) ?head ?quotation c:bad:char)]
+                   [(and (<= unicode x.ceiling) (char-integer? unicode)) (drop-bytes /dev/cin count) (integer->char unicode)]
                    [else (c-consume-error-chars /dev/cin (list #\\ #\x) ?head ?quotation c:bad:range)]))]
-          [(char-octdigit? next-ch) (read-limited-unicode-from-octadecimal* /dev/cin 2 (char->octadecimal next-ch))]
+          [(char-octdigit? next-ch)
+           (let-values ([(unicode count) (peek-flexible-octadecimal /dev/cin 0 (char->octadecimal next-ch) #:ceiling #o777)])
+             (cond [(byte? unicode) (drop-bytes /dev/cin count) (integer->char unicode)]
+                   [else (c-consume-error-chars /dev/cin (list #\\) ?head ?quotation c:bad:range)]))]
           [(eq? next-ch #\u) (c-consume-universal-char /dev/cin 4 #false (list #\\ #\u) ?head ?quotation 0)]
           [(eq? next-ch #\U) (c-consume-universal-char /dev/cin 8 #false (list #\\ #\U) ?head ?quotation 0)]
           [else next-ch #| should warn "unknown escape sequence" for chars other than #\\, #\', #\", and #\? |#])))
@@ -298,8 +313,8 @@
     [(/dev/cin shortform-size initial? leading-chars ?head ?quotation skip0)
      (let-values ([(unicode count) (peek-unicode-from-hexadecimal /dev/cin skip0 0 0)])
        (cond [(not (= count shortform-size)) (c-consume-error-chars /dev/cin leading-chars ?head ?quotation c:bad:char)]
-             [(not (c-identifier-universal-char? unicode)) (c-consume-error-chars /dev/cin leading-chars ?head ?quotation c:bad:char)]
-             [(and initial? (c-identifier-non-initial-char? unicode)) (c-consume-error-chars /dev/cin leading-chars ?head ?quotation c:bad:char)]
+             [(not (c-identifier-universal-char? unicode)) (c-consume-error-chars /dev/cin leading-chars ?head ?quotation c:bad:range)]
+             [(and initial? (c-identifier-non-initial-char? unicode)) (c-consume-error-chars /dev/cin leading-chars ?head ?quotation c:bad:range)]
              [else (drop-bytes /dev/cin (+ skip0 count)) unicode]))]))
   
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
