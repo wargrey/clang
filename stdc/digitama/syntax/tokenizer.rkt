@@ -6,6 +6,7 @@
 (require "tokenizer/keyword.rkt")
 
 (require digimon/character)
+(require digimon/number)
 (require digimon/stdio)
 
 (require racket/string)
@@ -79,7 +80,7 @@
           [else (case ch
                   [(#\( #\[ #\{ #\<) (c-make-token srcloc c:open ch)]
                   [(#\) #\] #\} #\>) (c-make-token srcloc c:close ch)]
-                  [(#\") (c-consume-string-token srcloc ch cpp? #xFF)]
+                  [(#\" #\') (c-consume-characters-token srcloc ch cpp? #xFF)]
                   ;[(#\+) (c-consume-numeric-token srcloc ch #true)]
                   ;[(#\.) (c-consume-numeric-token srcloc ch #false)]
                   ;[(#\^ #\$ #\| #\~ #\*) (c-consume-match-token srcloc ch)]
@@ -108,7 +109,7 @@
     (c-consume-whitespace /dev/cin)
     (c-make-token srcloc c:whitespace #\space)))
   
-(define c-consume-identifier-token : (-> C-Srcloc Char Boolean (U C:Identifier C:Keyword C:String C:Bad))
+(define c-consume-identifier-token : (-> C-Srcloc Char Boolean (U C:Identifier C:Keyword C:String C:Char C:MultiChar C:Bad))
   (lambda [srcloc leader cpp?]
     (define /dev/cin : Input-Port (c-srcloc-in srcloc))
     (define maybe-id : (U String C-Bad-Datum) (c-consume-identifier /dev/cin leader))
@@ -121,10 +122,10 @@
                                 (if (or (eq? ?quotation #\") (eq? ?quotation #\'))
                                     (let* ([prefix-len (string-length maybe-id)]
                                            [raw? (and (> prefix-len 0) #| <- redundant |# (eq? (string-ref maybe-id (sub1 prefix-len)) #\R))])
-                                      (c-consume-special-string-token srcloc sym ?quotation cpp? raw?))
+                                      (c-consume-special-characters-token srcloc sym ?quotation cpp? raw?))
                                     (c-make-token srcloc c:identifier sym)))]))])))
   
-(define c-consume-universal-identifier-token : (-> C-Srcloc Boolean (U C:Identifier C:Keyword C:String C:Bad))
+(define c-consume-universal-identifier-token : (-> C-Srcloc Boolean (U C:Identifier C:Keyword C:String C:Char C:MultiChar C:Bad))
   (lambda [srcloc cpp?]
     (define /dev/cin : Input-Port (c-srcloc-in srcloc))
     (define maybe-head : (U Char C-Bad-Datum) (c-consume-universal-char /dev/cin (list #\\) #false #false 0))
@@ -132,23 +133,34 @@
     (cond [(pair? maybe-head) (c-make-bad-token srcloc struct:c:identifier maybe-head)]
           [else (c-consume-identifier-token srcloc maybe-head cpp?)])))
 
-(define c-consume-string-token : (->* (C-Srcloc Char Boolean Nonnegative-Fixnum) ((Option Symbol)) (U C:String C:Bad))
-  (lambda [srcloc quotation cpp? x.ceiling [tag #false]]
+(define c-consume-characters-token : (->* (C-Srcloc Char Boolean Nonnegative-Fixnum) ((Option Symbol)) (U C:String C:Char C:MultiChar C:Bad))
+  (lambda [srcloc quotation cpp? x.ceiling [enc-tag #false]]
     (define /dev/cin : Input-Port (c-srcloc-in srcloc))
     (define-values (maybe-string maybe-suffix)
       (if (not cpp?)
           (c-consume-native-char-sequence /dev/cin quotation x.ceiling)
           (cpp-consume-native-char-sequence /dev/cin quotation x.ceiling)))
 
-    (cond [(string? maybe-string) (c-make-token srcloc c:string maybe-string tag maybe-suffix)]
-          [else (c-make-bad-token srcloc (car maybe-string) struct:c:string
-                                  (append (if (not tag) null (string->list (symbol->immutable-string tag)))
-                                          (cond [(not maybe-suffix) (cdr maybe-string)]
-                                                [else (append (cdr maybe-string)
-                                                              (string->list (symbol->immutable-string maybe-suffix)))])))])))
+    (cond [(pair? maybe-string)
+           (let ([struct:target (if (eq? quotation #\') struct:c:char struct:c:string)])
+             (c-make-bad-token srcloc (car maybe-string) struct:target
+                               (append (if (not enc-tag) null (string->list (symbol->immutable-string enc-tag)))
+                                       (cond [(not maybe-suffix) (cdr maybe-string)]
+                                             [else (append (cdr maybe-string)
+                                                           (string->list (symbol->immutable-string maybe-suffix)))]))))]
+          [(eq? quotation #\") (c-make-token srcloc c:string maybe-string enc-tag maybe-suffix)]
+          [(eq? (string-length maybe-string) 1) (c-make-token srcloc c:char (string-ref maybe-string 0) enc-tag maybe-suffix)]
+          [else (let ([repr (string-append (if (not enc-tag) "" (symbol->immutable-string enc-tag))
+                                           "'" maybe-string "'"
+                                           (if (not maybe-suffix) "" (symbol->immutable-string maybe-suffix)))])
+                  (cond [(not enc-tag) ; implementation-specific. We should check if every character could be represented by `char`
+                         (c-make-token srcloc c:multichar repr maybe-suffix (network-bytes->integer (string->bytes/utf-8 maybe-string)) enc-tag)]
+                        [(eq? enc-tag 'L) ; implementation-specific. clang employs the last char, whereas msvc employs the first one
+                         (c-make-token srcloc c:multichar repr maybe-suffix (network-bytes->integer (string->bytes/utf-8 maybe-string)) enc-tag)]
+                        [else (c-make-bad-token srcloc c:bad:char struct:c:multichar (string->list repr))]))])))
 
 (define c-consume-cpp-raw-string-token : (-> C-Srcloc Char Symbol (U C:String C:Bad))
-  (lambda [srcloc quotation encoding-prefix]
+  (lambda [srcloc quotation enc-tag]
     (define /dev/cin : Input-Port (c-srcloc-in srcloc))
 
     (define maybe-edelim : (U String C-Bad-Datum)
@@ -162,7 +174,7 @@
               [(eq? ch #\() (begin0 (string-append (read-tail-string /dev/cin span #\)) (string quotation)) (read-char /dev/cin))]
               [else (c-consume-error-chars /dev/cin null (read-tail-string /dev/cin span #false) quotation c:bad:raw)])))
 
-    (define maybe-string : (U String C:Bad C-Bad-Datum)
+    (define maybe-raw : (U String C:Bad C-Bad-Datum)
       (if (string? maybe-edelim)
           (let ([dsize : Index (string-length maybe-edelim)])
             (let read-raw-string ([span : Nonnegative-Fixnum 0]
@@ -173,22 +185,31 @@
                     [(not (equal? maybe-edelim (peek-string dsize skip /dev/cin))) (read-raw-string (unsafe-fx+ span 1) (unsafe-fx+ skip 1))]
                     [else (begin0 (read-tail-string /dev/cin span #false) (read-string! maybe-edelim /dev/cin))])))
           (c-make-bad-token srcloc (car maybe-edelim) struct:c:string
-                            (append (string->list (symbol->immutable-string encoding-prefix))
+                            (append (string->list (symbol->immutable-string enc-tag))
                                     (cdr maybe-edelim)))))
 
-    (cond [(string? maybe-string) (c-make-token srcloc c:string maybe-string encoding-prefix #false)]
-          [(pair? maybe-string) (c-make-bad-token srcloc (car maybe-string) struct:c:string (cdr maybe-string))]
-          [else maybe-string])))
+    (cond [(string? maybe-raw)
+           (let-values ([(maybe-string maybe-suffix) (c-consume-string-suffix /dev/cin maybe-raw)])
+             (if (string? maybe-string)
+                 (c-make-token srcloc c:string maybe-string enc-tag maybe-suffix)
+                 (c-make-bad-token srcloc (car maybe-string) struct:c:string
+                                   (cond [(not maybe-suffix) (cdr maybe-string)]
+                                         [else (append (cdr maybe-string)
+                                                       (string->list (symbol->immutable-string maybe-suffix)))]))))]
+          [(pair? maybe-raw) (c-make-bad-token srcloc (car maybe-raw) struct:c:string (cdr maybe-raw))]
+          [else maybe-raw])))
 
-(define c-consume-special-string-token : (-> C-Srcloc Symbol Char Boolean Boolean (U C:Identifier C:String C:Bad))
-  (lambda [srcloc tag quotation cpp? raw?]
-    (define encoding-tags : (Listof Symbol) (if (or (not cpp?) (eq? quotation #\')) c-encoding-tags cpp-encoding-tags))
+(define c-consume-special-characters-token : (-> C-Srcloc Symbol Char Boolean Boolean (U C:Identifier C:String C:Char C:MultiChar C:Bad))
+  (lambda [srcloc enc-tag quotation cpp? raw?]
+    (define encoding-tags : (Listof Symbol)
+      (cond [(or (not cpp?) (eq? quotation #\')) c-encoding-tags]
+            [else cpp-encoding-tags]))
     
-    (cond [(not (memq tag encoding-tags)) (c-make-token srcloc c:identifier tag)]
-          [else (let ([x.ceiling (cpp-encoding-tag->x.ceiling tag)])
+    (cond [(not (memq enc-tag encoding-tags)) (c-make-token srcloc c:identifier enc-tag)]
+          [else (let ([x.ceiling (cpp-encoding-tag->x.ceiling enc-tag)])
                   (read-char (c-srcloc-in srcloc))
-                  (cond [(not raw?) (c-consume-string-token srcloc quotation cpp? x.ceiling tag)]
-                        [else (c-consume-cpp-raw-string-token srcloc quotation tag)]))])))
+                  (cond [(not raw?) (c-consume-characters-token srcloc quotation cpp? x.ceiling enc-tag)]
+                        [else (c-consume-cpp-raw-string-token srcloc quotation enc-tag)]))])))
 
 #;(define c-consume-numeric-token : (-> C-Srcloc Char Boolean (U C-Numeric C:Delim C:Bad))
   ;;; https://drafts.csswg.org/c-syntax/#consume-a-number

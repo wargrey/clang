@@ -1,3 +1,5 @@
+#lang stdc/c
+
 #include <stdio.h>
 
 #define HE HI

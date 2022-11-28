@@ -23,10 +23,10 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (define-syntax (define-token stx)
   (syntax-parse stx #:literals [: Symbol Keyword]
-    [(_ id : Number parent #:as Type #:=? type=? #:with id? id-datum)
+    [(_ id : Number parent #:as Type #:=? type=? #:with id? id-datum rest ...)
      (with-syntax ([id=? (format-id #'id "~a=?" (syntax-e #'id))])
        (syntax/loc stx
-         (begin (struct id parent ([datum : Type]) #:transparent #:type-name Number)
+         (begin (struct id parent ([datum : Type] rest ...) #:transparent #:type-name Number)
                 (define (id=? [t1 : Number] [t2 : Number]) : Boolean (type=? (id-datum t1) (id-datum t2)))
                 (define-token-interface id : Type id? id-datum #:+ Number #:= type=? #:for C-Syntax-Any #:throw exn:c:range))))]
     [(_ id : Identifier parent ((~and (~or Symbol Keyword) Type) rest ...) #:with id? id-datum)
@@ -60,7 +60,7 @@
 
 (define-syntax (define-numeric-tokens stx)
   (syntax-case stx []
-    [(_ token #:+ Token #:nan nan #:-> parent [id #:+ ID #:as Type] ...)
+    [(_ token #:+ Token #:nan nan #:-> parent [id #:+ ID #:as Type rest ...] ...)
      (with-syntax ([token->datum (format-id #'token "~a->datum" (syntax-e #'token))]
                    [([id? id=? id-datum type=?] ...)
                     (for/list ([<id> (in-list (syntax->list #'(id ...)))]
@@ -74,7 +74,7 @@
                                     [else #'=]))))])
        (syntax/loc stx
          (begin (struct token parent () #:transparent #:type-name Token)
-                (define-token id : ID token #:as Type #:=? type=? #:with id? id-datum) ...
+                (define-token id : ID token #:as Type #:=? type=? #:with id? id-datum rest ...) ...
                 (define (token->datum [t : Token]) : (U Type ...) (cond [(id? t) (id-datum t)] ... [else nan])))))]))
   
 (define-syntax (define-tokens stx)
@@ -111,7 +111,7 @@
 ;; https://drafts.csswg.org/c-syntax/#component-value
 ;; https://drafts.csswg.org/c-syntax/#current-input-token
 (define-tokens c-token syn-token #:+ C-Token
-  [[c-numeric         #:+ C-Numeric         #:-> c-token   ([representation : String] [signed? : Boolean])]]
+  [[c-numeric         #:+ C-Numeric         #:-> c-token   ([representation : String] [suffix : (Option Symbol)])]]
 
   [[c:open            #:+ C:Open            #:-> c:operator]
    [c:colon           #:+ C:Colon           #:-> c:operator]
@@ -132,13 +132,13 @@
     [c:operator       #:+ C:Operator        #:as Char]
     [c:identifier     #:+ C:Identifier      #:as Symbol]
     [c:keyword        #:+ C:Keyword         #:as Keyword]
-    [c:string         #:+ C:String          #:as String   [type : (Option Symbol)] [suffix : (Option Symbol)]]
-    [c:literal        #:+ C:Literal         #:as Char]
+    [c:string         #:+ C:String          #:as String   [encoding : (Option Symbol)] [suffix : (Option Symbol)]]
+    [c:char           #:+ C:Char            #:as Char     [encoding : (Option Symbol)] [suffix : (Option Symbol)]]
     [c:punctuator     #:+ C:Punctuator      #:as Symbol]
     [c:whitespace     #:+ C:WhiteSpace      #:as (U String Char)])
 
   (define-numeric-tokens c-number #:+ C-Number #:nan +nan.0 #:-> c-numeric
-    [c:multichar      #:+ C:MultiChar       #:as Integer]
+    [c:multichar      #:+ C:MultiChar       #:as Integer  [encoding : (Option Symbol)]]
     [c:integer        #:+ C:Integer         #:as Fixnum]
     [c:flonum         #:+ C:Flonum          #:as Flonum])
 

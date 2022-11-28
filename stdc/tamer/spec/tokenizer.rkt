@@ -27,6 +27,7 @@
   (lambda [c]
     (cond [(procedure? c) (object-name c)]
           [(string? c) (string-append "`" c "`")]
+          [(exact-integer? c) (string-append "0x" (number->string c 16))]
           [else c])))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -90,6 +91,15 @@
                   (it-check-tokens "\\u0022" (list c:bad:range?) #false)
                   (it-check-tokens "\\U0000036F" (list c:bad:range?) #false)
                   (it-check-tokens "\\u4f60\\u597d\\U0000FE2F" (list (string->symbol "你好\uFE2F")) #false)))
+
+              (describe "Character" #:do
+                (it-check-tokens "'A'" (list #\A) #false)
+                (it-check-tokens "'ABCD'" (list #x41424344) #false)
+                (it-check-tokens "'abcd'" (list #x61626364) #false)
+                (it-check-tokens "u8'x'" (list #\x) #false)
+                (it-check-tokens "L'1234'" (list c:multichar?) #false) ; implmentation-specific
+                (it-check-tokens "u'abcd'" (list c:bad:char?) #false)
+                (it-check-tokens "U'abcd'" (list c:bad:char?) #false))
 
               (describe "String" #:do
                 (it-check-tokens "\"abcd\"" (list "abcd") #false)

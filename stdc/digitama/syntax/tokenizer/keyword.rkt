@@ -41,6 +41,7 @@
                      (cons #\a #\u07)
                      (cons #\0 #\null))))
 
+; C17 doesn't mention 'u8' for char
 (define c-encoding-tags : (Listof Symbol) (list 'u8 'u 'U 'L))
 (define cpp-encoding-tags : (Listof Symbol) (list 'u8 'u 'U 'L 'R 'u8R 'uR 'UR 'LR))
 

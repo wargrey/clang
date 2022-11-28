@@ -51,7 +51,7 @@
 (define c-other->drtype ;: (-> C-Token Symbol)
   (lambda [token]
     (cond [(c:string? token) 'string]
-          [(c:literal? token) 'constant]
+          [(c:char? token) 'constant]
           ;[(c:hash? token) 'hash-colon-keyword]
           [(c:bad? token) 'error]
           [else 'other])))
