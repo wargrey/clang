@@ -1,6 +1,6 @@
 #lang racket/base
 
-(provide c-lexer)
+(provide c-lexer cpp-lexer)
 
 (require stdc/digitama/syntax/digicore)
 (require stdc/digitama/syntax/tokenizer)

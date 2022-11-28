@@ -97,8 +97,8 @@
     (define /dev/cin : Input-Port (c-srcloc-in srcloc))
     (define ch1 : (U EOF Char) (peek-char /dev/cin 0))
     (cond [(eof-object? ch1) (c-make-token srcloc c:slash #\/)]
-          [(char=? ch1 #\/) (read-char /dev/cin) (let ([c (read-line /dev/cin)]) (c-make-token srcloc c:whitespace (if (string? c) c "")))]
-          [(not (char=? ch1 #\*)) (c-make-token srcloc c:slash #\/)]
+          [(eq? ch1 #\/) (read-char /dev/cin) (let ([c (read-line /dev/cin)]) (c-make-token srcloc c:whitespace (if (string? c) c "")))]
+          [(not (eq? ch1 #\*)) (c-make-token srcloc c:slash #\/)]
           [(regexp-match #px".*?((\\*/)|$)" /dev/cin) => (λ [**/] (c-make-token srcloc c:whitespace (format "/~a" (car **/))))]
           [else (c-make-bad-token srcloc c:bad:eof struct:c:whitespace "/*")])))
 
@@ -112,16 +112,17 @@
   (lambda [srcloc leader cpp?]
     (define /dev/cin : Input-Port (c-srcloc-in srcloc))
     (define maybe-id : (U String C-Bad-Datum) (c-consume-identifier /dev/cin leader))
-    
+
     (cond [(pair? maybe-id) (c-make-bad-token srcloc struct:c:identifier maybe-id)]
           [else (let ([keyword-map (if (not cpp?) c-keyword-map cpp-keyword-map)]
                       [sym (string->symbol maybe-id)])
                   (cond [(hash-has-key? keyword-map sym) (c-make-token srcloc c:keyword (hash-ref keyword-map sym))]
-                        [else (let ([?q (peek-char /dev/cin 0)])
-                                (cond [(not (or (eq? ?q #\") (eq? ?q #\'))) (c-make-token srcloc c:identifier sym)]
-                                      [else (c-consume-special-string-token srcloc sym ?q cpp?
-                                                                            (eq? (string-ref maybe-id (sub1 (string-length maybe-id)))
-                                                                                 #\R))]))]))])))
+                        [else (let ([?quotation (peek-char /dev/cin 0)])
+                                (if (or (eq? ?quotation #\") (eq? ?quotation #\'))
+                                    (let* ([prefix-len (string-length maybe-id)]
+                                           [raw? (and (> prefix-len 0) #| <- redundant |# (eq? (string-ref maybe-id (sub1 prefix-len)) #\R))])
+                                      (c-consume-special-string-token srcloc sym ?quotation cpp? raw?))
+                                    (c-make-token srcloc c:identifier sym)))]))])))
   
 (define c-consume-universal-identifier-token : (-> C-Srcloc Boolean (U C:Identifier C:Keyword C:String C:Bad))
   (lambda [srcloc cpp?]
@@ -136,24 +137,58 @@
     (define /dev/cin : Input-Port (c-srcloc-in srcloc))
     (define-values (maybe-string maybe-suffix)
       (if (not cpp?)
-          (c-consume-string /dev/cin quotation x.ceiling)
-          (cpp-consume-string /dev/cin quotation x.ceiling)))
+          (c-consume-native-char-sequence /dev/cin quotation x.ceiling)
+          (cpp-consume-native-char-sequence /dev/cin quotation x.ceiling)))
 
     (cond [(string? maybe-string) (c-make-token srcloc c:string maybe-string tag maybe-suffix)]
           [else (c-make-bad-token srcloc (car maybe-string) struct:c:string
-                                  (cond [(not maybe-suffix) (cdr maybe-string)]
-                                        [else (append (cdr maybe-string)
-                                                      (string->list (symbol->immutable-string maybe-suffix)))]))])))
+                                  (append (if (not tag) null (string->list (symbol->immutable-string tag)))
+                                          (cond [(not maybe-suffix) (cdr maybe-string)]
+                                                [else (append (cdr maybe-string)
+                                                              (string->list (symbol->immutable-string maybe-suffix)))])))])))
+
+(define c-consume-cpp-raw-string-token : (-> C-Srcloc Char Symbol (U C:String C:Bad))
+  (lambda [srcloc quotation encoding-prefix]
+    (define /dev/cin : Input-Port (c-srcloc-in srcloc))
+
+    (define maybe-edelim : (U String C-Bad-Datum)
+      (let read-delimiter ([span : Nonnegative-Fixnum 0]
+                           [skip : Nonnegative-Fixnum 0])
+        (define ch : (U EOF Char) (peek-char /dev/cin skip))
+        (cond [(eof-object? ch) (c-consume-error-chars /dev/cin null (read-tail-string /dev/cin span #false) quotation c:bad:eof)]
+              [(eq? ch quotation) (c-consume-error-chars /dev/cin null (read-tail-string /dev/cin span #false) quotation c:bad:raw)]
+              [(> span 16) (c-consume-error-chars /dev/cin null (read-tail-string /dev/cin span #false) quotation c:bad:raw)]
+              [(not (c-raw-string-nondelimiter-char? ch)) (read-delimiter (+ span 1) (unsafe-fx+ skip (char-utf-8-length ch)))]
+              [(eq? ch #\() (begin0 (string-append (read-tail-string /dev/cin span #\)) (string quotation)) (read-char /dev/cin))]
+              [else (c-consume-error-chars /dev/cin null (read-tail-string /dev/cin span #false) quotation c:bad:raw)])))
+
+    (define maybe-string : (U String C:Bad C-Bad-Datum)
+      (if (string? maybe-edelim)
+          (let ([dsize : Index (string-length maybe-edelim)])
+            (let read-raw-string ([span : Nonnegative-Fixnum 0]
+                                  [skip : Nonnegative-Fixnum 0])
+              (define ch : (U EOF Char) (peek-char /dev/cin skip))
+              (cond [(eof-object? ch) (c-consume-error-chars /dev/cin null (read-tail-string /dev/cin span #false) quotation c:bad:eof)]
+                    [(not (eq? ch #\))) (read-raw-string (unsafe-fx+ span 1) (unsafe-fx+ skip (char-utf-8-length ch)))]
+                    [(not (equal? maybe-edelim (peek-string dsize skip /dev/cin))) (read-raw-string (unsafe-fx+ span 1) (unsafe-fx+ skip 1))]
+                    [else (begin0 (read-tail-string /dev/cin span #false) (read-string! maybe-edelim /dev/cin))])))
+          (c-make-bad-token srcloc (car maybe-edelim) struct:c:string
+                            (append (string->list (symbol->immutable-string encoding-prefix))
+                                    (cdr maybe-edelim)))))
+
+    (cond [(string? maybe-string) (c-make-token srcloc c:string maybe-string encoding-prefix #false)]
+          [(pair? maybe-string) (c-make-bad-token srcloc (car maybe-string) struct:c:string (cdr maybe-string))]
+          [else maybe-string])))
 
 (define c-consume-special-string-token : (-> C-Srcloc Symbol Char Boolean Boolean (U C:Identifier C:String C:Bad))
   (lambda [srcloc tag quotation cpp? raw?]
     (define encoding-tags : (Listof Symbol) (if (or (not cpp?) (eq? quotation #\')) c-encoding-tags cpp-encoding-tags))
-
+    
     (cond [(not (memq tag encoding-tags)) (c-make-token srcloc c:identifier tag)]
           [else (let ([x.ceiling (cpp-encoding-tag->x.ceiling tag)])
                   (read-char (c-srcloc-in srcloc))
                   (cond [(not raw?) (c-consume-string-token srcloc quotation cpp? x.ceiling tag)]
-                        [else (c-consume-string-token srcloc quotation cpp? x.ceiling tag)]))])))
+                        [else (c-consume-cpp-raw-string-token srcloc quotation tag)]))])))
 
 #;(define c-consume-numeric-token : (-> C-Srcloc Char Boolean (U C-Numeric C:Delim C:Bad))
   ;;; https://drafts.csswg.org/c-syntax/#consume-a-number
@@ -182,7 +217,7 @@
                              [(hz khz)                (c-make-token srcloc c:frequency       rep+unit signed? value unit)]
                              [(dpi dpcm dppx x)       (c-make-token srcloc c:resolution      rep+unit signed? value unit)]
                              [else                    (c-make-token srcloc c:dimension       rep+unit signed? value unit)])]
-                          [(and (char? ch1) (char=? ch1 #\%) (read-char /dev/cin))
+                          [(and (char? ch1) (eq? ch1 #\%) (read-char /dev/cin))
                            (define n% : Flonum (real->double-flonum (* n 0.01)))
                            (c-make-token srcloc c:percentage (string-append representation "%") signed? n%)]
                           [(flonum? n)
@@ -231,7 +266,7 @@
                                   (cond [(char? maybe-unicode) (consume-universal-id (string-append head++ (string maybe-unicode)) 0 0)]
                                         [else maybe-unicode]))]))]))))
 
-(define c-consume-string : (-> Input-Port Char Nonnegative-Fixnum (Values (U String C-Bad-Datum) False))
+(define c-consume-native-char-sequence : (-> Input-Port Char Nonnegative-Fixnum (Values (U String C-Bad-Datum) False))
   (lambda [/dev/cin quotation x.ceiling]
     (values
      (let consume-string ([span : Nonnegative-Fixnum 0]
@@ -252,19 +287,21 @@
                                    (cond [(char? maybe-char) (consume-escaped-string (string-append head++ (string maybe-char)) 0 0)]
                                          [(eof-object? maybe-char) head++]
                                          [else maybe-char]))]))]))
-
      #false)))
 
-(define cpp-consume-string : (-> Input-Port Char Nonnegative-Fixnum (Values (U String C-Bad-Datum) (Option Symbol)))
-  (lambda [/dev/cin quotation x.ceiling]
-    (define-values (maybe-string _) (c-consume-string /dev/cin quotation x.ceiling))
-
-    ; check for temporary string or user-defined suffix
-    (cond [(not (c-identifier-char? (peek-char /dev/cin 0))) (values maybe-string #false)]
+(define c-consume-string-suffix : (-> Input-Port (U String C-Bad-Datum) (Values (U String C-Bad-Datum) (Option Symbol)))
+  (lambda [/dev/cin target-string]
+    ; check for standard or user-defined suffix
+    (cond [(not (c-identifier-char? (peek-char /dev/cin 0))) (values target-string #false)]
           [else (let ([maybe-suffix (c-consume-identifier /dev/cin #false)])
-                  (cond [(string? maybe-suffix) (values maybe-string (string->symbol maybe-suffix))]
-                        [(string? maybe-string) (values (cons c:bad:suffix (append (string->list maybe-string) (cdr maybe-suffix))) #false)]
-                        [else (values (cons (car maybe-string) (append (cdr maybe-string) (cdr maybe-suffix))) #false)]))])))
+                  (cond [(string? maybe-suffix) (values target-string (string->symbol maybe-suffix))]
+                        [(string? target-string) (values (cons c:bad:suffix (append (string->list target-string) (cdr maybe-suffix))) #false)]
+                        [else (values (cons (car target-string) (append (cdr target-string) (cdr maybe-suffix))) #false)]))])))
+
+(define cpp-consume-native-char-sequence : (-> Input-Port Char Nonnegative-Fixnum (Values (U String C-Bad-Datum) (Option Symbol)))
+  (lambda [/dev/cin quotation x.ceiling]
+    (define-values (maybe-string _) (c-consume-native-char-sequence /dev/cin quotation x.ceiling))
+    (c-consume-string-suffix /dev/cin maybe-string)))
 
 #;(define c-consume-number : (-> Input-Port Char (Values (U Flonum Integer) String))
   ;;; https://drafts.csswg.org/c-syntax/#consume-a-number
@@ -273,7 +310,7 @@
       (define ch : (U EOF Char) (peek-char /dev/cin))
       (cond [(and (char? ch)
                   (or (char-numeric? ch)
-                      (char=? ch #\+) (char=? ch #\-)
+                      (eq? ch #\+) (eq? ch #\-)
                       (c-decimal-point? ch (peek-char /dev/cin 1))
                       (c-scientific-notation? ch (peek-char /dev/cin 1) (peek-char /dev/cin 2)))
                   (read-char /dev/cin))
@@ -323,28 +360,28 @@
     (and (char? ch)
          (or (char-alphabetic? ch)
              (char-numeric? ch)
-             (char=? #\_ ch)
+             (eq? #\_ ch)
              (c-identifier-implementation-defined-char? ch)))))
 
 (define c-identifier-initial-char? : (-> (U EOF Char) Boolean : #:+ Char)
   (lambda [ch]
     (and (char? ch)
          (or (char-alphabetic? ch)
-             (char=? #\_ ch)
+             (eq? #\_ ch)
              (c-identifier-implementation-defined-char? ch)))))
 
 (define c-identifier-implementation-defined-char? : (-> Char Boolean)
   ; these chars as identifiers' prefixes are borrowed from CSS
   (lambda [ch]
-    (or (char=? #\u00B7 ch)
+    (or (eq? #\u00B7 ch)
         (char<=? #\u00C0 ch #\u00D6)
         (char<=? #\u00D8 ch #\u00F6)
         (char<=? #\u00F8 ch #\u037D)
         (char<=? #\u037F ch #\u1FFF)
-        (char=? #\u200C ch)
-        (char=? #\u200D ch)
-        (char=? #\u203F ch)
-        (char=? #\u2040 ch)
+        (eq? #\u200C ch)
+        (eq? #\u200D ch)
+        (eq? #\u203F ch)
+        (eq? #\u2040 ch)
         (char<=? #\u2070 ch #\u218F)
         (char<=? #\u2C00 ch #\u2FEF)
         (char<=? #\u3001 ch #\uD7FF)
@@ -354,10 +391,10 @@
 
 (define c-identifier-universal-char? : (-> Char Boolean)
   (lambda [ch]
-    (or (char=? #\u00A8 ch)
-        (char=? #\u00AA ch)
-        (char=? #\u00AD ch)
-        (char=? #\u00AF ch)
+    (or (eq? #\u00A8 ch)
+        (eq? #\u00AA ch)
+        (eq? #\u00AD ch)
+        (eq? #\u00AF ch)
         (char<=? #\u00B2 ch #\u00B5)
         (char<=? #\u00B7 ch #\u00BA)
         (char<=? #\u00BC ch #\u00BE)
@@ -370,7 +407,7 @@
         (char<=? #\u200B ch #\u200D)
         (char<=? #\u202A ch #\u202E)
         (char<=? #\u203F ch #\u2040)
-        (char=? #\u2054 ch)
+        (eq? #\u2054 ch)
         (char<=? #\u2060 ch #\u206F)
         (char<=? #\u2070 ch #\u218F)
         (char<=? #\u2460 ch #\u24FF)
@@ -405,16 +442,23 @@
         (char<=? #\u20D0 ch #\u20FF)
         (char<=? #\uFE20 ch #\uFE2F))))
 
+(define c-raw-string-nondelimiter-char? : (-> Char Boolean)
+  (lambda [ch]
+    (or (char-whitespace? ch)
+        (eq? ch #\\)
+        (eq? ch #\))
+        (eq? ch #\())))
+
 #;(define c-number-prefix? : (-> (U EOF Char) (U EOF Char) (U EOF Char) Boolean : #:+ Char)
   ;;; https://drafts.csswg.org/c-syntax/#starts-with-a-number
   (lambda [ch1 ch2 ch3]
     (or (and (char? ch1) (char<=? #\0 ch1 #\9))
         (and (char? ch1) (char? ch2)
-             (char=? ch1 #\.) (char<=? #\0 ch2 #\9))
+             (eq? ch1 #\.) (char<=? #\0 ch2 #\9))
         (and (char? ch1) (char? ch2)
-             (or (char=? ch1 #\+) (char=? ch1 #\-))
+             (or (eq? ch1 #\+) (eq? ch1 #\-))
              (or (char<=? #\0 ch2 #\9)
-                 (and (char=? ch2 #\.)
+                 (and (eq? ch2 #\.)
                       (char? ch3) (char<=? #\0 ch3 #\9)))))))
 
 #;(define c-scientific-notation? : (-> (U EOF Char) (U EOF Char) (U EOF Char) Boolean : #:+ Char)
@@ -423,7 +467,7 @@
     (and (char? ch1) (char? ch2)
          (char-ci=? ch1 #\e)
          (or (char<=? #\0 ch2 #\9)
-             (and (or (char=? ch2 #\+) (char=? ch2 #\-))
+             (and (or (eq? ch2 #\+) (eq? ch2 #\-))
                   (char? ch3)
                   (char<=? #\0 ch3 #\9))))))
 
@@ -431,7 +475,7 @@
   ;;; https://drafts.csswg.org/c-syntax/#consume-a-number
   (lambda [ch1 ch2]
     (and (char? ch1) (char? ch2)
-         (char=? ch1 #\.)
+         (eq? ch1 #\.)
          (char<=? #\0 ch2 #\9))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

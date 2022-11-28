@@ -122,6 +122,7 @@
    
    [c:bad:eof         #:+ C:Bad:EOF         #:-> c:bad]
    [c:bad:eol         #:+ C:Bad:EOL         #:-> c:bad]
+   [c:bad:raw         #:+ C:Bad:Raw         #:-> c:bad]
    [c:bad:char        #:+ C:Bad:Char        #:-> c:bad]
    [c:bad:blank       #:+ C:Bad:Blank       #:-> c:bad]
    [c:bad:range       #:+ C:Bad:Range       #:-> c:bad]
@@ -195,12 +196,8 @@
           [(c-numeric? instance) (c-numeric-representation instance)]
           [(c:keyword? instance) (keyword->immutable-string (c:keyword-datum instance))]
           [(c:operator=:=? instance #\tab) "||"]
-          [(not (c:string? instance)) (~a (c-token->datum instance))]
-          [else (let ([pf (c:string-type instance)]
-                      [sf (c:string-suffix instance)])
-                  (string-append (if pf (symbol->immutable-string pf) "")
-                                 (~s (c:string-datum instance))
-                                 (if sf (symbol->immutable-string sf) "")))])))
+          [(c:string? instance) (c:string-datum instance)]
+          [else (~a (c-token->datum instance))])))
 
 (define c-token->string : (->* (C-Token) ((Option Any) (Option Any)) String)
   (lambda [instance [alt-object #false] [alt-datum #false]]
