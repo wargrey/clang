@@ -13,7 +13,7 @@
   #:type-name C-Source)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(define read-c-source : (-> Syn-Token-StdIn C-Source)
+(define read-c-source : (-> Syn-Token-Stdin C-Source)
   (lambda [/dev/rawin]
     (define /dev/cin : Input-Port (cpp-open-input-port /dev/rawin #false))
     (define source : (U String Symbol) (syn-token-port-name /dev/cin))
