@@ -2,7 +2,7 @@
 
 (provide (all-defined-out))
 (provide (all-from-out racket/flonum racket/fixnum racket/list racket/format))
-(provide (struct-out SYN-Token) syn-token-port-location syn-token-port-name)
+(provide (struct-out SYN-Token) syn-token-port-location syn-token-port-name syn-token-skip-whitespace)
 
 (require racket/fixnum)
 (require racket/flonum)
@@ -113,12 +113,12 @@
 (define-tokens c-token syn-token #:+ C-Token
   [[c-numeric         #:+ C-Numeric         #:-> c-token   ([representation : String] [suffix : (Option Symbol)])]]
 
-  [[c:open            #:+ C:Open            #:-> c:operator]
-   [c:colon           #:+ C:Colon           #:-> c:operator]
-   [c:semicolon       #:+ C:Semicolon       #:-> c:operator]
-   [c:comma           #:+ C:Comma           #:-> c:operator]
-   [c:slash           #:+ C:Slash           #:-> c:operator]
-   [c:eq              #:+ C:Eq              #:-> c:operator]
+  [[c:open            #:+ C:Open            #:-> c:punctuator]
+   [c:colon           #:+ C:Colon           #:-> c:punctuator]
+   [c:semicolon       #:+ C:Semicolon       #:-> c:punctuator]
+   [c:comma           #:+ C:Comma           #:-> c:punctuator]
+   [c:slash           #:+ C:Slash           #:-> c:punctuator]
+   [c:eq              #:+ C:Eq              #:-> c:punctuator]
    
    [c:bad:eof         #:+ C:Bad:EOF         #:-> c:bad]
    [c:bad:eol         #:+ C:Bad:EOL         #:-> c:bad]
@@ -129,12 +129,11 @@
    [c:bad:suffix      #:+ C:Bad:Suffix      #:-> c:bad]]
 
   (define-symbolic-tokens c-symbolic-token #:+ C-Symbolic-Token
-    [c:operator       #:+ C:Operator        #:as Char]
     [c:identifier     #:+ C:Identifier      #:as Symbol]
     [c:keyword        #:+ C:Keyword         #:as Keyword]
-    [c:string         #:+ C:String          #:as String   [encoding : (Option Symbol)] [suffix : (Option Symbol)]]
-    [c:char           #:+ C:Char            #:as Char     [encoding : (Option Symbol)] [suffix : (Option Symbol)]]
-    [c:punctuator     #:+ C:Punctuator      #:as Symbol]
+    [c:string         #:+ C:String          #:as String          [encoding : (Option Symbol)] [suffix : (Option Symbol)]]
+    [c:char           #:+ C:Char            #:as Char            [encoding : (Option Symbol)] [suffix : (Option Symbol)]]
+    [c:punctuator     #:+ C:Punctuator      #:as (U Char Symbol) [alternative : (Option (U Char Symbol))]]
     [c:whitespace     #:+ C:WhiteSpace      #:as (U String Char)])
 
   (define-numeric-tokens c-number #:+ C-Number #:nan +nan.0 #:-> c-numeric
@@ -195,7 +194,7 @@
     (cond [(c:identifier? instance) (symbol->immutable-string (c:identifier-datum instance))]
           [(c-numeric? instance) (c-numeric-representation instance)]
           [(c:keyword? instance) (keyword->immutable-string (c:keyword-datum instance))]
-          [(c:operator=:=? instance #\tab) "||"]
+          [(c:punctuator=:=? instance #\tab) "||"]
           [(c:string? instance) (c:string-datum instance)]
           [else (~a (c-token->datum instance))])))
 

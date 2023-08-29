@@ -30,6 +30,8 @@
            static_assert static_cast struct switch template this thread_local throw true try typedef typeid typename
            union unsigned using virtual void volatile wchar_t while])
 
+(define-c-keywords iso464-alternatives : [and and_eq bitor bitand compl not not_eq or or_eq xor xor_eq])
+
 (define c-escape-sequences : (HashTable Any Char)
   (make-hasheq (list (cons #\n #\newline)
                      (cons #\t #\tab)

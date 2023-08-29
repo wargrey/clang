@@ -1,7 +1,7 @@
 #lang info
 
 (define collection 'use-pkg-name)
-(define pkg-desc "Toolbox for C in pure Typed Racket")
+(define pkg-desc "A sort of C/C++ utilities in pure Typed Racket")
 
 (define version "1.0")
 (define test-omit-paths 'all)

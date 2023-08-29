@@ -22,14 +22,14 @@
           [(c:whitespace? t) (c-hlvalues t (if (string? (c:whitespace-datum t)) 'comment 'white-space) #false mode)]
           [(c:keyword? t) (c-hlvalues t (c-keyword->drtype (c:keyword-datum t) #false) #false mode)]
           [(c:identifier? t) (c-hlvalues t (c-id->drtype (c:identifier-datum t) #false) #false mode)]
-          [(c:open? t) (c-hlvalues t 'parenthesis (string->symbol (string (c:operator-datum t))) mode)]
+          [(c:open? t) (c-hlvalues t 'parenthesis (string->symbol (string (c:punctuator-datum t))) mode)]
           [(c:close? t) (c-hlvalues t 'parenthesis (string->symbol (string (c:close-datum t))) mode)]
-          [(c:operator? t) (c-hlvalues t (c-char->drtype (c:operator-datum t)) #false mode)]
+          [(c:punctuator? t) (c-hlvalues t (c-op-or-punc->drtype (c:punctuator-datum t)) #false mode)]
           [(c-numeric? t) (c-hlvalues t 'constant #false mode)]
           [else (c-hlvalues t (c-other->drtype t) #false mode)])))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(define c-char->drtype ;: (-> Char Symbol)
+(define c-op-or-punc->drtype ;: (-> (U Char Symbol) Symbol)
   (lambda [delim]
     (case delim
       [(#\:) 'sexp-comment]

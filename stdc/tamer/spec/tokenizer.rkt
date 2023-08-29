@@ -79,7 +79,7 @@
                 (it-check-tokens "_" (list '_) #false)
                 (it-check-tokens "true" (list 'true) #false)
                 (it-check-tokens "true false" (list '#:true c:whitespace? '#:false) #true)
-                (it-check-tokens "c-cpp" (list 'c c:operator? 'cpp) #false)
+                (it-check-tokens "c-cpp" (list 'c c:punctuator? 'cpp) #false)
                 (it-check-tokens "_\\u597d_" (list '_好_) #false)
                 (it-check-tokens "テスト" (list 'テスト) #false)
                 (it-check-tokens "\\u30D1\\u30F3" (list 'パン) #false)

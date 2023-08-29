@@ -37,8 +37,10 @@
     [(_ src make-c:token datum ...)
      (syntax/loc stx
        (let-values ([(line column here-position) (syn-token-port-location (c-srcloc-in src))])
-         (make-c:token (c-srcloc-source src) (c-srcloc-line src) (c-srcloc-column src)
-                       (c-srcloc-position src) here-position datum ...)))]))
+         (make-c:token (c-srcloc-source src)
+                       (c-srcloc-line src) (c-srcloc-column src)
+                       (c-srcloc-position src) here-position
+                       datum ...)))]))
   
 (define-syntax (c-make-bad-token stx)
   (syntax-case stx []
@@ -78,7 +80,7 @@
           ;[(char-numeric? ch) (c-consume-numeric-token srcloc ch #false)]
           [(c-identifier-initial-char? ch) (c-consume-identifier-token srcloc ch cpp?)]
           [else (case ch
-                  [(#\( #\[ #\{ #\<) (c-make-token srcloc c:open ch)]
+                  [(#\( #\[ #\{ #\<) (c-make-token srcloc c:open ch #false)]
                   [(#\) #\] #\} #\>) (c-make-token srcloc c:close ch)]
                   [(#\" #\') (c-consume-characters-token srcloc ch cpp? #xFF)]
                   ;[(#\+) (c-consume-numeric-token srcloc ch #true)]
@@ -86,27 +88,27 @@
                   ;[(#\^ #\$ #\| #\~ #\*) (c-consume-match-token srcloc ch)]
                   ;[(#\#) (c-consume-hash-token srcloc)]
                   [(#\/) (c-consume-comment-token srcloc)]
-                  [(#\;) (c-make-token srcloc c:semicolon #\;)]
-                  [(#\,) (c-make-token srcloc c:comma #\,)]
-                  [(#\=) (c-make-token srcloc c:eq #\=)]
-                  [(#\:) (c-make-token srcloc c:colon #\:)]
+                  [(#\;) (c-make-token srcloc c:semicolon #\; #false)]
+                  [(#\,) (c-make-token srcloc c:comma #\, #false)]
+                  [(#\=) (c-make-token srcloc c:eq #\= #false)]
+                  [(#\:) (c-make-token srcloc c:colon #\: #false)]
                   [(#\\) (c-consume-universal-identifier-token srcloc cpp?)]
                   [else (c-make-bad-token srcloc c:bad:char struct:c:punctuator ch)])])))
 
-(define c-consume-comment-token : (-> C-Srcloc (U C:WhiteSpace C:Operator C:Bad))
+(define c-consume-comment-token : (-> C-Srcloc (U C:WhiteSpace C:Punctuator C:Bad))
   (lambda [srcloc]
     (define /dev/cin : Input-Port (c-srcloc-in srcloc))
     (define ch1 : (U EOF Char) (peek-char /dev/cin 0))
-    (cond [(eof-object? ch1) (c-make-token srcloc c:slash #\/)]
+    (cond [(eof-object? ch1) (c-make-token srcloc c:slash #\/ #false)]
           [(eq? ch1 #\/) (read-char /dev/cin) (let ([c (read-line /dev/cin)]) (c-make-token srcloc c:whitespace (if (string? c) c "")))]
-          [(not (eq? ch1 #\*)) (c-make-token srcloc c:slash #\/)]
+          [(not (eq? ch1 #\*)) (c-make-token srcloc c:slash #\/ #false)]
           [(regexp-match #px".*?((\\*/)|$)" /dev/cin) => (λ [**/] (c-make-token srcloc c:whitespace (format "/~a" (car **/))))]
           [else (c-make-bad-token srcloc c:bad:eof struct:c:whitespace "/*")])))
 
 (define c-consume-whitespace-token : (-> C-Srcloc C:WhiteSpace)
   (lambda [srcloc]
     (define /dev/cin : Input-Port (c-srcloc-in srcloc))
-    (c-consume-whitespace /dev/cin)
+    (syn-token-skip-whitespace /dev/cin)
     (c-make-token srcloc c:whitespace #\space)))
   
 (define c-consume-identifier-token : (-> C-Srcloc Char Boolean (U C:Identifier C:Keyword C:String C:Char C:MultiChar C:Bad))
@@ -211,14 +213,12 @@
                   (cond [(not raw?) (c-consume-characters-token srcloc quotation cpp? x.ceiling enc-tag)]
                         [else (c-consume-cpp-raw-string-token srcloc quotation enc-tag)]))])))
 
-#;(define c-consume-numeric-token : (-> C-Srcloc Char Boolean (U C-Numeric C:Delim C:Bad))
-  ;;; https://drafts.csswg.org/c-syntax/#consume-a-number
-  ;;; https://drafts.csswg.org/c-values/#numeric-types
-  (lambda [srcloc sign/digit signed?]
+#;(define c-consume-numeric-token : (-> C-Srcloc Char Boolean Boolean (U C-Numeric C:Delim C:Bad))
+  (lambda [srcloc sign/digit signed? cpp?]
     (define /dev/cin : Input-Port (c-srcloc-in srcloc))
     (define ch1 : (U EOF Char) (peek-char /dev/cin 0))
     (define ch2 : (U EOF Char) (peek-char /dev/cin 1))
-    (cond [(not (c-number-prefix? sign/digit ch1 ch2)) (c-make-token srcloc c:delim sign/digit)]
+    (cond [(not (c-number-prefix? sign/digit ch1 ch2)) (c-make-bad-token srcloc c:bad:char struct:c:punctuator sign/digit)]
           [else (let-values ([(n representation) (c-consume-number /dev/cin sign/digit)])
                   (let ([ch1 : (U EOF Char) (peek-char /dev/cin 0)]
                         [ch2 : (U EOF Char) (peek-char /dev/cin 1)]
@@ -249,24 +249,7 @@
                           [(= n 1) (c-make-token srcloc c:one representation signed? n)]
                           [else (c-make-token srcloc c:integer representation signed? n)])))])))
 
-#;(define c-consume-hash-token : (-> C-Srcloc (U C:Hash C:Delim))
-  ;;; https://drafts.csswg.org/c-syntax/#hash-token-diagram
-  (lambda [srcloc]
-    (define /dev/cin : Input-Port (c-srcloc-in srcloc))
-    (define ch1 : (U EOF Char) (peek-char /dev/cin 0))
-    (define ch2 : (U EOF Char) (peek-char /dev/cin 1))
-    (define ch3 : (U EOF Char) (peek-char /dev/cin 2))
-    (if (or (c-char-name? ch1) (c-valid-escape? ch1 ch2))
-        (let ([name (c-consume-name (c-srcloc-in srcloc) #false)])
-          (c-make-token srcloc c:hash (string->keyword name) #|(string->keyword (string-downcase name))|#))
-        (c-make-token srcloc c:delim #\#))))
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(define c-consume-whitespace : (-> Input-Port Void)
-  (lambda [/dev/cin]
-    (regexp-match #px"\\s*" /dev/cin)
-    (void)))
-  
 (define c-consume-identifier : (-> Input-Port (Option Char) (U String C-Bad-Datum))
   (lambda [/dev/cin ?leader]
     (let consume-id ([span : Nonnegative-Fixnum 0]
@@ -324,7 +307,7 @@
     (define-values (maybe-string _) (c-consume-native-char-sequence /dev/cin quotation x.ceiling))
     (c-consume-string-suffix /dev/cin maybe-string)))
 
-#;(define c-consume-number : (-> Input-Port Char (Values (U Flonum Integer) String))
+(define c-consume-number : (-> Input-Port Char (Values (U Flonum Integer) String))
   ;;; https://drafts.csswg.org/c-syntax/#consume-a-number
   (lambda [/dev/cin sign/digit]
     (let consume-number ([chars (list sign/digit)])
@@ -470,8 +453,7 @@
         (eq? ch #\))
         (eq? ch #\())))
 
-#;(define c-number-prefix? : (-> (U EOF Char) (U EOF Char) (U EOF Char) Boolean : #:+ Char)
-  ;;; https://drafts.csswg.org/c-syntax/#starts-with-a-number
+(define c-number-prefix? : (-> (U EOF Char) (U EOF Char) (U EOF Char) Boolean : #:+ Char)
   (lambda [ch1 ch2 ch3]
     (or (and (char? ch1) (char<=? #\0 ch1 #\9))
         (and (char? ch1) (char? ch2)
@@ -482,7 +464,7 @@
                  (and (eq? ch2 #\.)
                       (char? ch3) (char<=? #\0 ch3 #\9)))))))
 
-#;(define c-scientific-notation? : (-> (U EOF Char) (U EOF Char) (U EOF Char) Boolean : #:+ Char)
+(define c-scientific-notation? : (-> (U EOF Char) (U EOF Char) (U EOF Char) Boolean : #:+ Char)
   ;;; https://drafts.csswg.org/c-syntax/#consume-a-number
   (lambda [ch1 ch2 ch3]
     (and (char? ch1) (char? ch2)
@@ -492,7 +474,7 @@
                   (char? ch3)
                   (char<=? #\0 ch3 #\9))))))
 
-#;(define c-decimal-point? : (-> (U EOF Char) (U EOF Char) Boolean : #:+ Char)
+(define c-decimal-point? : (-> (U EOF Char) (U EOF Char) Boolean : #:+ Char)
   ;;; https://drafts.csswg.org/c-syntax/#consume-a-number
   (lambda [ch1 ch2]
     (and (char? ch1) (char? ch2)
